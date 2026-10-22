@@ -1,0 +1,27 @@
+name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm run test:loopback
+      - run: npm -C examples/relay-cloudflare run typecheck
+  swift-core:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift package dump-package
+      - run: swift test --package-path ios
+      - run: .github/scripts/typecheck-ios.sh

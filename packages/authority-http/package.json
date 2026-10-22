@@ -1,0 +1,1 @@
+{"name":"@niho-translate/authority-http","version":"0.1.0","private":true,"type":"module","exports":"./src/index.ts","dependencies":{"@niho-translate/relay-core":"0.1.0"}}

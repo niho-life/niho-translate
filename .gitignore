@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.build/
+.swiftpm/
+.DS_Store
+tmp/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+*.xcuserstate
+xcuserdata/

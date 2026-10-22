@@ -226,6 +226,7 @@ function main(): void {
     perMessageDeflate: false,
   });
   webSockets.on("connection", async (socket, request) => {
+    socket.on("error", () => socket.terminate());
     type Identity = {
       roomId: string;
       roomEpoch: string;

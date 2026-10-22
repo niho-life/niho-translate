@@ -145,7 +145,10 @@ export class OpenAITranslationProvider {
     try {
       this.transport.send(JSON.stringify({
         type: "session.update",
-        session: { audio: { output: { language: this.outputLanguage } } },
+        session: { audio: {
+          input: { transcription: null, noise_reduction: { type: "near_field" } },
+          output: { language: this.outputLanguage },
+        } },
       }));
       this.awaitingUpdate = "initial";
     } catch {

@@ -1,6 +1,7 @@
 name: check
 on:
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read
@@ -15,6 +16,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
+      - run: npm run test:loopback
       - run: npm -C examples/relay-cloudflare run typecheck
   swift-core:
     runs-on: macos-15

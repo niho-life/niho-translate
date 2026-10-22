@@ -1,5 +1,7 @@
 # アーキテクチャ
 
+v1はマイク付きイヤフォン用のnear-field noise reductionを指定し、追加のsource transcriptionを明示的に無効化します。字幕は相手向けの翻訳済みoutput transcriptを使い、原文/本人の発言を表示するために別のASRを動かしません。
+
 `packages/protocol` はJSON protocol v1とruntime validationの正本です。client入力は24 kHz mono PCM16の20 ms frame整数倍・最大200 msです。provider出力はdelta境界がframeと一致しないため、even-byte PCMとして検証し、relay/client間では最大200 msへ分割します。字幕は改行・tabを許可し、その他のcontrol文字と4,096文字超を拒否します。
 
 `packages/provider-openai` はinjected WebSocket factory/clockを使います。接続中の最初の音声は5秒分（240,000 bytes）までqueueし、`session.created` 後の初期設定に対する `session.updated` を待ってから順番にflushします。5秒のconnect/config timeoutはこのACKまで有効です。transport bufferを観測できる場合は192,000 bytesでfail closedし、観測できない場合は同時に1件だけ空の部分 `session.update` を5秒間隔で送るcontrol ACK watchdogを使います。既知media eventとoptional PCM metadataを厳格に検証し、`rate_limits.updated` とboundedな未知non-media controlだけを無視します。出力は `session.output_audio.delta.delta` を読み、4,800-byte chunkへまとめ、close時のeven-byte末尾も短いPCMとして通知します。watchdogはtransport livenessだけを示し、翻訳成功は示しません。

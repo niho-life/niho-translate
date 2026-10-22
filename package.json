@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "test": "vitest run --maxWorkers=2 --no-file-parallelism",
+    "test:loopback": "node scripts/check-local-relay.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test"
   },

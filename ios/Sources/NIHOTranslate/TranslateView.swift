@@ -29,6 +29,9 @@ public struct TranslateView: View {
     private var english: Bool { session.config.sourceLanguage == .en }
     private func text(_ ja: String, _ en: String) -> String { english ? en : ja }
     private var connected: Bool { session.connectionStatus == .connected }
+    private var otherConnected: Bool {
+        session.participants.contains { $0.participantId != session.config.participantId }
+    }
     private var readyToStart: Bool {
         connected && session.participants.count == 2
             && session.participants.allSatisfy { $0.state != "connecting" && $0.state != "closed" }
@@ -58,7 +61,7 @@ public struct TranslateView: View {
                                 .font(.title2.bold())
                             Label(text("マイク付きイヤフォンを接続してください。", "Connect earphones with a microphone."), systemImage: "headphones")
                                 .font(.subheadline)
-                            Text(text("音声を翻訳サービスに送信します。NIHOに録音や会話履歴を保存しません。", "Audio is sent to the translation service. NIHO does not save recordings or conversation history."))
+                            Text(text("音声をOpenAIに送信して翻訳します。NIHOに録音や会話履歴を保存しません。", "Audio is sent to OpenAI for interpretation. NIHO does not save recordings or conversation history."))
                                 .font(.footnote).foregroundColor(.secondary)
                             Toggle(text("同意して通訳を使う", "I agree to use interpretation"), isOn: $consent)
                                 .onChange(of: consent) { session.setExplicitConsent($0) }
@@ -75,7 +78,7 @@ public struct TranslateView: View {
                             Button(text("通訳を始める", "Start interpretation")) { session.startRoom() }
                                 .buttonStyle(.borderedProminent).disabled(!readyToStart)
                         }
-                        if !session.roomActive {
+                        if !session.roomActive || !otherConnected {
                             Text(session.roomPaused
                                 ? text("通訳を一時停止しています。", "Interpretation is paused.")
                                 : text("相手の接続と、作成者の開始を待っています。", "Waiting for the other person and the host to start."))
@@ -149,6 +152,7 @@ public struct TranslateView: View {
     private var statusLabel: String {
         if session.roomEnded { return text("通訳を終了しました", "Interpretation ended") }
         if session.roomPaused { return text("一時停止中", "Paused") }
+        if connected && !otherConnected { return text("相手の接続待ち", "Waiting for the other person") }
         switch session.connectionStatus {
         case .disconnected: return text("接続前", "Not connected")
         case .connecting: return text("接続しています", "Connecting")

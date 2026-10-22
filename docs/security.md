@@ -1,5 +1,7 @@
 # セキュリティ要点
 
+同じ有効leaseが再発行されても、capture pause/resumeで音声消費量やpacingをリセットしません。接続内の短命な台帳を期限で回収し、source/providerの再作成と予算枠を分離します。
+
 - room/participant IDは仮名にし、音声、字幕、private credential、本人情報をファイル、DB、通常ログ、crash reportへ保存しません。字幕はmemory内で最大2分・4,096 deltaです。
 - ticket署名algはserver configの `EdDSA`/`RS256` allowlistに固定し、issuer、audience、期限、not-before、room scopeを検証します。ticket残存時間は最大60秒、jti cacheはroom数/件数をboundedにします。
 - restart跨ぎreplayはprivate Authorityのdurable jti consumeで拒否します。memory cacheだけを正本にしません。

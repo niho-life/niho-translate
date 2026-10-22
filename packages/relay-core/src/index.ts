@@ -168,6 +168,7 @@ interface Connection {
   provider?: TranslationSession;
   providerToken: number;
   lease?: LeaseState;
+  readonly leaseLedger: Map<string, LeaseState>;
   blocked: boolean;
   needsExplicitResume: boolean;
   lastPingAtMs: number;
@@ -286,6 +287,7 @@ export class RelayOrchestrator {
           generation: result.generation,
           admissionId: authorityAdmission.admissionId,
           providerToken: 0,
+          leaseLedger: new Map(),
           blocked: false,
           needsExplicitResume: false,
           lastPingAtMs: this.clock.now(),
@@ -584,14 +586,7 @@ export class RelayOrchestrator {
       ) {
         return;
       }
-      connection.lease = {
-        value: lease,
-        inputAudioMs: 0,
-        availableAudioMs: AUDIO_BURST_MS,
-        lastAudioAtMs: acquiredAt,
-        pendingUsageMs: 0,
-        lastUsageReportAtMs: acquiredAt,
-      };
+      connection.lease = this.rememberLease(connection, lease, acquiredAt);
       const providerToken = connection.providerToken + 1;
       connection.providerToken = providerToken;
       connection.provider = this.providers.create(
@@ -898,17 +893,34 @@ export class RelayOrchestrator {
       ) {
         return;
       }
-      connection.lease = {
-        value: next,
-        inputAudioMs: 0,
-        availableAudioMs: Math.min(current.availableAudioMs, AUDIO_BURST_MS),
-        lastAudioAtMs: completedAt,
-        pendingUsageMs: 0,
-        lastUsageReportAtMs: completedAt,
-      };
+      connection.lease = this.rememberLease(connection, next, completedAt, current.availableAudioMs);
     } catch {
       await this.failClosedForAuthority(connection.room);
     }
+  }
+
+  private rememberLease(connection: Connection, value: BudgetLease, nowMs: number, availableAudioMs = AUDIO_BURST_MS): LeaseState {
+    for (const [id, state] of connection.leaseLedger) {
+      if (state.value.expiresAtMs <= nowMs) connection.leaseLedger.delete(id);
+    }
+    const existing = connection.leaseLedger.get(value.leaseId);
+    if (existing) {
+      if (existing.value.expiresAtMs !== value.expiresAtMs || existing.value.maxInputAudioMs !== value.maxInputAudioMs) {
+        throw new Error("LEASE_ID_REUSED_WITH_DIFFERENT_LIMITS");
+      }
+      return existing;
+    }
+    if (connection.leaseLedger.size >= 4) throw new Error("LEASE_LEDGER_FULL");
+    const state: LeaseState = {
+      value,
+      inputAudioMs: 0,
+      availableAudioMs: Math.min(availableAudioMs, AUDIO_BURST_MS),
+      lastAudioAtMs: nowMs,
+      pendingUsageMs: 0,
+      lastUsageReportAtMs: nowMs,
+    };
+    connection.leaseLedger.set(value.leaseId, state);
+    return state;
   }
 
   private consumeLeaseAudio(lease: LeaseState, audioMs: number, nowMs: number): boolean {

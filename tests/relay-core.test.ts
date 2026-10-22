@@ -593,6 +593,34 @@ describe("relay orchestration", () => {
     await relay.dispose();
   });
 
+  it.each([
+    { maximumMs: 200, advanceMs: 100 },
+    { maximumMs: 15_000, advanceMs: 0 },
+  ])("keeps the same lease quota and pacing through capture pauses: $maximumMs/$advanceMs", async ({ maximumMs, advanceMs }) => {
+    const testAuthority = authority();
+    testAuthority.acquireLease = async () => ({
+      leaseId: "idempotent-active-lease", expiresAtMs: 16_000, maxInputAudioMs: maximumMs,
+    });
+    const clock = new Clock();
+    const factory = new Factory();
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    for (let index = 0; index < 3; index += 1) {
+      if (index > 0) {
+        await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.pause" }));
+        clock.time += advanceMs;
+        await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.resume" }));
+      }
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", atMs: clock.now(), audio: Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"),
+      }));
+    }
+    expect(factory.sessions.reduce((sum, value) => sum + value.appends.length, 0)).toBe(2);
+    expect(host.peer.events.some(event => event.type === "error" && event.code === "AUDIO_LIMIT")).toBe(true);
+    await relay.dispose();
+  });
+
   it("closes an unacknowledging listener and stops its source provider", async () => {
     const factory = new Factory();
     const relay = new RelayOrchestrator(verifier, authority(), factory, new Clock());

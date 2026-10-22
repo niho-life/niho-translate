@@ -79,7 +79,10 @@ describe("OpenAI provider adapter", () => {
     transport.message(JSON.stringify({ type: "session.created", session: { id: "synthetic" } }));
     expect(JSON.parse(transport.sent[0]!)).toEqual({
       type: "session.update",
-      session: { audio: { output: { language: "en" } } },
+      session: { audio: {
+        input: { transcription: null, noise_reduction: { type: "near_field" } },
+        output: { language: "en" },
+      } },
     });
     expect(transport.sent).toHaveLength(1);
     transport.message(JSON.stringify({ type: "session.updated", session: { id: "synthetic" } }));

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSummary,
   generatedPcm,
+  normalizePcmSilence,
   parseWavReplayArgs,
   PCM_SAMPLE_RATE,
 } from "../scripts/wav-replay-helper.ts";
@@ -40,7 +41,7 @@ describe("offline WAV replay helper", () => {
         sourceKind: "wav",
       },
       durationSeconds: 2 / PCM_SAMPLE_RATE,
-      providerExactPcmMatch: true,
+      providerNormalizedPcmMatch: true,
       providerInputMatch: true,
       relayJaToEnByteMatch: true,
       relayEnToJaByteMatch: true,
@@ -53,5 +54,13 @@ describe("offline WAV replay helper", () => {
     expect(serialized).not.toContain("/private/");
     expect(serialized).not.toContain(pcm.toString("base64"));
     expect(serialized).not.toContain("pcm");
+  });
+
+  it("normalizes only long zero runs while retaining quiet nonzero samples", () => {
+    const content = Buffer.from([1, 0, 0, 0, 255, 255]);
+    const source = Buffer.concat([Buffer.alloc(12_000), content, Buffer.alloc(12_000)]);
+    expect(normalizePcmSilence(source)).toEqual(Buffer.concat([content, Buffer.alloc(9_600)]));
+    expect(normalizePcmSilence(Buffer.alloc(20))).toHaveLength(0);
+    expect(() => normalizePcmSilence(Buffer.alloc(1))).toThrow();
   });
 });

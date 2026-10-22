@@ -13,6 +13,7 @@ import {
 import {
   createSummary,
   loadPcm,
+  normalizePcmSilence,
   parseWavReplayArgs,
   PCM_BYTES_PER_SAMPLE,
   PCM_SAMPLE_RATE,
@@ -85,7 +86,7 @@ async function checkProvider(pcm: Buffer): Promise<{ exact: boolean; input: bool
   assert.equal(output.length, outputChunksBeforeClose);
   await provider.close();
   return {
-    exact: !fatal && outputBeforeClose.equals(pcm),
+    exact: !fatal && normalizePcmSilence(outputBeforeClose).equals(normalizePcmSilence(pcm)),
     input: Buffer.concat(input).equals(padded),
   };
 }
@@ -254,7 +255,7 @@ try {
   process.stdout.write(`${JSON.stringify(createSummary({
     loaded,
     durationSeconds,
-    providerExactPcmMatch: provider.exact,
+    providerNormalizedPcmMatch: provider.exact,
     providerInputMatch: provider.input,
     relayJaToEnByteMatch: relay.jaToEn,
     relayEnToJaByteMatch: relay.enToJa,

@@ -1,10 +1,32 @@
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
+import { MAX_OUTPUT_SILENCE_BYTES } from "../packages/provider-openai/src/index.ts";
 
 export const WAV_REPLAY_DEFAULT_SECONDS = 10;
 export const WAV_REPLAY_MAX_SECONDS = 60;
 export const PCM_SAMPLE_RATE = 24_000;
 export const PCM_BYTES_PER_SAMPLE = 2;
+
+// Independent sample-level oracle: padding timing may change; voice samples may not.
+export function normalizePcmSilence(pcm: Buffer): Buffer {
+  if (pcm.length % 2 !== 0) throw new WavReplayError("WAV_INVALID_PCM");
+  const result = Buffer.alloc(pcm.length);
+  let written = 0;
+  let seenContent = false;
+  let silenceBytes = 0;
+  for (let offset = 0; offset < pcm.length; offset += 2) {
+    if (pcm.readInt16LE(offset) === 0) {
+      if (!seenContent || silenceBytes >= MAX_OUTPUT_SILENCE_BYTES) continue;
+      silenceBytes += 2;
+    } else {
+      seenContent = true;
+      silenceBytes = 0;
+    }
+    pcm.copy(result, written, offset, offset + 2);
+    written += 2;
+  }
+  return result.subarray(0, written);
+}
 
 export class WavReplayError extends Error {
   constructor(readonly code: string) {
@@ -193,7 +215,7 @@ function runBoundedChild(
 export function createSummary(input: {
   loaded: LoadedPcm;
   durationSeconds: number;
-  providerExactPcmMatch: boolean;
+  providerNormalizedPcmMatch: boolean;
   providerInputMatch: boolean;
   relayJaToEnByteMatch: boolean;
   relayEnToJaByteMatch: boolean;
@@ -209,7 +231,7 @@ export function createSummary(input: {
     sourceSampleCount: input.loaded.sourceSampleCount,
     convertedSampleCount: input.loaded.convertedSampleCount,
     provider: {
-      exactPcmMatch: input.providerExactPcmMatch,
+      silenceNormalizedPcmMatch: input.providerNormalizedPcmMatch,
       inputFrameMatch: input.providerInputMatch,
     },
     relay: {

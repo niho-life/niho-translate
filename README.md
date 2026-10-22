@@ -45,7 +45,7 @@ npm --silent -C . run test:wav
 npm --silent -C . run test:wav -- --wav /absolute/path/to/local.wav --seconds 10
 ```
 
-WAV指定時はnpm自身が実行commandへ引数を表示しないよう`--silent`を付けてください。CLI自身の成功・失敗出力にはpathやfilenameを含めません。この検証はfake transportを注入したprovider adapterとreference mock relayのechoを使うため、byte順序・欠落・protocol/ACKだけを確認します。翻訳の意味精度、実OpenAI API、Swift `AVAudioConverter`、実iPhone、イヤフォンへ届くlatency、実機10秒受入、60分連続運転の成功を示しません。
+WAV指定時はnpm自身が実行commandへ引数を表示しないよう`--silent`を付けてください。CLI自身の成功・失敗出力にはpathやfilenameを含めません。この検証はfake transportを注入したprovider adapterとreference mock relayのechoを使うため、providerでは無音正規化後の音声一致、relayでは完全byte一致とprotocol/ACKを確認します。providerは最初の発声前の完全無音を除き、発声後の完全無音を最大200msへ制限します。非ゼロsampleを含むchunkは小声も削りません。翻訳の意味精度、実OpenAI API、Swift `AVAudioConverter`、実iPhone、イヤフォンへ届くlatency、実機10秒受入、60分連続運転の成功を示しません。
 
 protocol v1は全server eventに接続単位で単調増加する `deliveryId` を付け、clientはdecode直後に `client.ack` を返します。relayは未ACKのwire bytesを512 KiB、event数を128に制限し、clientからのserial処理待ちは接続ごとに32件へ制限します。上限超過、未来のACK、ACKしないlistenerはfail closedで切断します。初回の認証失敗だけは `deliveryId` のないerrorを許容します。
 
@@ -56,7 +56,7 @@ protocol v1は全server eventに接続単位で単調増加する `deliveryId` �
 
 ## 未完了の受入
 
-実OpenAI APIによる音声成功、5秒間隔の空の部分 `session.update` が実APIで無害であること、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。
+provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信し、合成音声の時刻・金額・否定を確認済みです。実iPhone・ホスト認可/予算を含むroom全体、5秒間隔の空の部分 `session.update` が実APIで無害であること、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。
 
 ## 権利
 

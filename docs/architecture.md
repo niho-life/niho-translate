@@ -4,7 +4,7 @@ v1はマイク付きイヤフォン用のnear-field noise reductionを指定し�
 
 `packages/protocol` はJSON protocol v1とruntime validationの正本です。client入力は24 kHz mono PCM16の20 ms frame整数倍・最大200 msです。provider出力はdelta境界がframeと一致しないため、even-byte PCMとして検証し、relay/client間では最大200 msへ分割します。字幕は改行・tabを許可し、その他のcontrol文字と4,096文字超を拒否します。
 
-`packages/provider-openai` はinjected WebSocket factory/clockを使います。接続中の最初の音声は5秒分（240,000 bytes）までqueueし、`session.created` 後の初期設定に対する `session.updated` を待ってから順番にflushします。5秒のconnect/config timeoutはこのACKまで有効です。transport bufferを観測できる場合は192,000 bytesでfail closedし、観測できない場合は同時に1件だけ空の部分 `session.update` を5秒間隔で送るcontrol ACK watchdogを使います。既知media eventとoptional PCM metadataを厳格に検証し、`rate_limits.updated` とboundedな未知non-media controlだけを無視します。出力は `session.output_audio.delta.delta` ごとにeven-byte PCMを検証し、各deltaを最大4,800 bytesへ順序どおり分割して端数も直ちに通知します。次deltaやcloseを待つ出力bufferは持ちません。watchdogはtransport livenessだけを示し、翻訳成功は示しません。
+`packages/provider-openai` はinjected WebSocket factory/clockを使います。接続中の最初の音声は5秒分（240,000 bytes）までqueueし、`session.created` 後の初期設定に対する `session.updated` を待ってから順番にflushします。5秒のconnect/config timeoutはこのACKまで有効です。transport bufferを観測できる場合は192,000 bytesでfail closedし、観測できない場合は同時に1件だけ空の部分 `session.update` を5秒間隔で送るcontrol ACK watchdogを使います。既知media eventとoptional PCM metadataを厳格に検証し、`rate_limits.updated` とboundedな未知non-media controlだけを無視します。出力は `session.output_audio.delta.delta` ごとにeven-byte PCMを検証し、各deltaを最大4,800 bytesへ順序どおり分割して端数も直ちに通知します。次deltaやcloseを待つ出力bufferは持ちません。最初の非ゼロPCMより前の完全無音は配信せず、その後の連続した完全無音chunkは最大200msへ制限します。非ゼロsampleを1つでも含むchunkは小声を含め全byteを維持し、energy閾値や推測によるcodec変更は使いません。長い完全無音の間隔は短縮されます。watchdogはtransport livenessだけを示し、翻訳成功は示しません。
 
 `packages/room-core` は外部I/Oを持たないroom state machineです。v1はhost 1席 + guest 1席で、切断後2分の席予約、generation、明示host control、最大90分、字幕2分を管理します。`client.ready` は開始ではなく、相手言語のready listenerがいなければcaptureできません。v1は出力言語ごとに話者が1人のため、音声の配信条件は有効なcapture・相手listener・現行providerです。端末energy/focusは推定時刻だけに使い、小声や10秒を超えた有効な翻訳音声を捨てません。room-coreのfocus policyはv2の検討基盤として保持しています。
 
@@ -43,4 +43,4 @@ ended tombstoneはroom最大寿命90分 + ticket最大TTL 60秒以上保持し�
 - latencyは `unknown` または `estimated` だけです。
 - provider final eventやprovider発話境界へ依存しません。
 - SDKは実会話の音声・字幕を保存しません。性能評価には合成音声または利用承認済み評価素材だけを使います。
-- 実API audio成功、iPhone実機10秒受入、仮目標（中央値2秒・P95 4秒）の達成確認は未完了です。
+- provider単体の実API音声・字幕受信は確認済みです。room全体、iPhone実機10秒受入、仮目標（中央値2秒・P95 4秒）の達成確認は未完了です。

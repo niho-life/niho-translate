@@ -56,7 +56,7 @@ protocol v1は全server eventに接続単位で単調増加する `deliveryId` �
 
 ## 未完了の受入
 
-provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信し、合成音声の時刻・金額・否定を確認済みです。実iPhone・ホスト認可/予算を含むroom全体、5秒間隔の空の部分 `session.update` が実APIで無害であること、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。
+provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信しました。合成音声の時刻・金額・否定は初回両方向で一致し、繰り返しの1回では金額の自動判定が不一致でした。意味精度の人による確認、実iPhone・ホスト認可/予算を含むroom全体、5秒間隔の空の部分 `session.update` が実APIで無害であること、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。
 
 ## 権利
 

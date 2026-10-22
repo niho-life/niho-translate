@@ -92,18 +92,19 @@ describe("OpenAI provider adapter", () => {
     });
 
     transport.message(JSON.stringify({ type: "rate_limits.updated", rate_limits: [] }));
+    const translatedAudio = Buffer.alloc(AUDIO_BATCH_BYTES, 7).toString("base64");
     transport.message(JSON.stringify({
       type: "session.output_audio.delta",
-      delta: audio,
+      delta: translatedAudio,
       sample_rate: 24_000,
       channels: 1,
       format: "pcm16",
     }));
-    expect(sink.onOutputAudio).toHaveBeenCalledWith(audio);
+    expect(sink.onOutputAudio).toHaveBeenCalledWith(translatedAudio);
     expect(sink.onFatal).not.toHaveBeenCalled();
   });
 
-  it("emits every even PCM delta immediately and splits only oversized deltas", () => {
+  it("emits every non-silent even PCM delta immediately and splits only oversized deltas", () => {
     const transport = new FakeTransport();
     const sink = createSink();
     new OpenAITranslationProvider("key", "ja", { connect: () => transport }, sink, new FakeClock());
@@ -135,6 +136,45 @@ describe("OpenAI provider adapter", () => {
     transport.message(JSON.stringify({ type: "session.closed" }));
     transport.closed();
     expect(sink.onOutputAudio).toHaveBeenCalledTimes(callsBeforeClose);
+  });
+
+  it("bounds only digital silence while preserving quiet speech, gaps, and new speech", () => {
+    const transport = new FakeTransport();
+    const sink = createSink();
+    new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, new FakeClock());
+    transport.open();
+    transport.message(JSON.stringify({ type: "session.created", session: {} }));
+    transport.message(JSON.stringify({ type: "session.updated", session: {} }));
+    const emit = (bytes: Buffer) => transport.message(JSON.stringify({
+      type: "session.output_audio.delta", delta: bytes.toString("base64"),
+    }));
+    emit(Buffer.alloc(48_000));
+    expect(sink.onOutputAudio).not.toHaveBeenCalled();
+    emit(Buffer.from([1, 0])); // The quietest nonzero PCM16 sample must survive.
+    emit(Buffer.alloc(1_002));
+    emit(Buffer.alloc(9_600));
+    emit(Buffer.alloc(2));
+    emit(Buffer.from([255, 255]));
+    emit(Buffer.alloc(2));
+    const output = Buffer.concat((sink.onOutputAudio as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => Buffer.from(call[0], "base64")));
+    expect(output).toEqual(Buffer.concat([
+      Buffer.from([1, 0]), Buffer.alloc(9_600), Buffer.from([255, 255]), Buffer.alloc(2),
+    ]));
+    expect(sink.onFatal).not.toHaveBeenCalled();
+  });
+
+  it("retains all samples within a mixed voice/silence chunk without an energy threshold", () => {
+    const transport = new FakeTransport();
+    const sink = createSink();
+    new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, new FakeClock());
+    transport.open();
+    transport.message(JSON.stringify({ type: "session.created", session: {} }));
+    transport.message(JSON.stringify({ type: "session.updated", session: {} }));
+    const mixed = Buffer.alloc(AUDIO_BATCH_BYTES);
+    mixed.writeInt16LE(1, AUDIO_BATCH_BYTES - 2);
+    transport.message(JSON.stringify({ type: "session.output_audio.delta", delta: mixed.toString("base64") }));
+    expect(sink.onOutputAudio).toHaveBeenCalledWith(mixed.toString("base64"));
   });
 
   it("ignores bounded unknown non-media controls but rejects unknown media and binary data", () => {

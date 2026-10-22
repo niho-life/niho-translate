@@ -11,6 +11,7 @@ export const MAX_PROVIDER_BUFFERED_BYTES = 192_000;
 export const MAX_PROVIDER_PREOPEN_BYTES = 240_000;
 export const PROVIDER_CONNECT_TIMEOUT_MS = 5_000;
 export const PROVIDER_HEALTH_INTERVAL_MS = 5_000;
+export const MAX_OUTPUT_SILENCE_BYTES = 9_600; // 200 ms at 24 kHz mono PCM16.
 
 export interface ProviderTransport {
   readonly bufferedAmount: number | undefined;
@@ -47,6 +48,8 @@ export class OpenAITranslationProvider {
   private configured = false;
   private readonly preopen: string[] = [];
   private preopenBytes = 0;
+  private outputHasContent = false;
+  private outputSilenceBytes = 0;
   private ignoredControlEvents = 0;
   private connectTimeout: unknown;
   private healthTimer: unknown;
@@ -274,7 +277,18 @@ export class OpenAITranslationProvider {
       return;
     }
     for (let offset = 0; offset < chunk.byteLength; offset += AUDIO_BATCH_BYTES) {
-      this.sink.onOutputAudio(chunk.subarray(offset, offset + AUDIO_BATCH_BYTES).toString("base64"));
+      const part = chunk.subarray(offset, offset + AUDIO_BATCH_BYTES);
+      if (part.every(byte => byte === 0)) {
+        // Only digital silence is shortened. Quiet/nonzero speech is never gated.
+        if (!this.outputHasContent) continue;
+        const keep = Math.min(part.byteLength, MAX_OUTPUT_SILENCE_BYTES - this.outputSilenceBytes);
+        this.outputSilenceBytes += keep;
+        if (keep > 0) this.sink.onOutputAudio(part.subarray(0, keep).toString("base64"));
+      } else {
+        this.outputHasContent = true;
+        this.outputSilenceBytes = 0;
+        this.sink.onOutputAudio(part.toString("base64"));
+      }
     }
   }
 
@@ -352,6 +366,8 @@ export class OpenAITranslationProvider {
     this.awaitingUpdate = undefined;
     this.preopen.length = 0;
     this.preopenBytes = 0;
+    this.outputHasContent = false;
+    this.outputSilenceBytes = 0;
     this.state = "closed";
     this.closedResolve();
   }

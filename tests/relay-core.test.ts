@@ -243,6 +243,35 @@ describe("ticket boundary", () => {
 });
 
 describe("relay orchestration", () => {
+  it("blocks on provider loss until explicit resume and drops the old provider tail", async () => {
+    const factory = new Factory();
+    const testAuthority = authority();
+    const acquire = vi.spyOn(testAuthority, "acquireLease");
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, new Clock());
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const guest = connected.get("guest-en")!;
+    const send = (type: string, rest = {}) => relay.receive("r", "e", "host-ja", host.generation,
+      JSON.stringify({ v: 1, type, ...rest }));
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+    await send("audio.append", { audio, atMs: 0 });
+    const old = factory.sessions[0]!;
+    old.sink.onFatal("PROVIDER_TRANSPORT");
+    await relay.tick();
+    expect(host.peer.events.some(event => event.type === "error" && event.code === "PROVIDER_ERROR")).toBe(true);
+    expect(old.closed).toBe(true);
+    await send("audio.append", { audio, atMs: 0 });
+    expect(acquire).toHaveBeenCalledTimes(1);
+    await send("capture.resume");
+    await send("audio.append", { audio, atMs: 0 });
+    expect(acquire).toHaveBeenCalledTimes(2);
+    const count = guest.peer.events.filter(event => event.type === "audio").length;
+    old.sink.onOutputAudio(audio);
+    await relay.tick();
+    expect(guest.peer.events.filter(event => event.type === "audio")).toHaveLength(count);
+    await relay.dispose();
+  });
+
   it("requires explicit host start and fans one source out to the opposite-language peer", async () => {
     const clock = new Clock();
     const factory = new Factory();

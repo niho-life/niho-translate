@@ -13,6 +13,8 @@
 
 `capture.pause/resume` は本人のマイクだけを制御し、受信audioを止めません。`room.start/pause/resume/end` はhost専用です。source/target変更は途中操作ではなく、新しいadmission/roomで行います。
 
+翻訳providerの切断やsession期限超過は `PROVIDER_ERROR` とsource pauseになります。同一roomの有効な接続では、利用者の明示 `capture.resume` 後にAuthorityのfresh acquireを通してproviderを作り直します。公表されたprovider期限をSDKが延長することはなく、期限をまたぐ自動更新は未実装です。約60分の会話では、この停止と再開も確認してください。
+
 接続試行、Native pong期限、send/receive、queue上限の失敗後に、SDKは同じ`TranslateSession`とticketで自動再接続しません。ホストアプリへ戻る導線を使い、Authorityからfresh scoped ticketを取得して、新しい`TranslateSession`を生成してください。SDKへNIHOログイン情報やrefresh grantを渡してはいけません。接続後のNative ping/pong watchdogはtransportの生存確認であり、無音中も有効ですが、翻訳処理の成功確認ではありません。
 
 `leave()`、接続喪失、接続後の`setExplicitConsent(false)`はそのSessionの終端です。送受信・再生・収録を止め、字幕を破棄し、同じinstanceへ同意を入れ直しても再接続しません。接続前の同意選択とOS許可の確認は、ticketを実際に試行するまでは行えます。
@@ -55,3 +57,10 @@ lease拒否・失効・usage失敗後はsourceをblockedにし、audio packetご
 ## iOS host app
 
 `NSMicrophoneUsageDescription`、Audio background mode、認証・invite UIはhost appが定義します。Bluetooth HFPまたは有線headsetはplayback準備時にinputとoutputの両方を検証します。マイクmuteはcaptureだけを止め、翻訳再生を止めません。切断やroute喪失・interruption時はcapture/playbackを止めてaudio sessionをdeactivateし、speakerへ自動切替せず、route復帰後も利用者の明示操作までresumeしません。明示resume時にもprivate input/outputを再検証し、失敗時はmute/listening pauseを維持します。
+
+
+## v1の実通訳relay
+
+送信バッファを観測でき、native ping/pongを使う `examples/relay-local` のreal modeを選びます。名前はlocalですが、実API・JWT・外部Authorityの経路を持ちます。loopbackの前にTLS終端proxyを置き、単一processへroutingしてください。複数processへそのまま増やしてはいけません。ホストの接続先と配備設定の反映は別途必要です。
+
+現在の `examples/relay-cloudflare` は送信バッファを観測できず、provider設定前に停止します。周期 `session.update` による代替のhealth checkは意味欠落を再現したため廃止しました。未観測値を0にしたり、無音中に返らない翻訳を配送ACK扱いしたりして有効化しないでください。

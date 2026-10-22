@@ -116,19 +116,34 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(scheduler.scheduledCount, 2)
     }
 
-    func testPlaybackSchedulerBoundsMemoryAndDropsOnlyQueuedAudio() {
+    func testPlaybackSchedulerRejectsOverflowWithoutChangingQueuedOrder() {
         var scheduler = PlaybackScheduler(maximumBytes: 12, maximumScheduledBytes: 4)
         let scheduled = scheduler.enqueue(Data(repeating: 1, count: 4), generation: 0)
         XCTAssertEqual(scheduled.count, 1)
         XCTAssertTrue(scheduler.enqueue(Data(repeating: 2, count: 4), generation: 0).isEmpty)
         XCTAssertTrue(scheduler.enqueue(Data(repeating: 3, count: 4), generation: 0).isEmpty)
-        XCTAssertTrue(scheduler.enqueue(Data(repeating: 4, count: 4), generation: 0).isEmpty)
+        guard case .overflow = scheduler.enqueueResult(Data(repeating: 4, count: 4), generation: 0) else {
+            return XCTFail("expected overflow")
+        }
         XCTAssertEqual(scheduler.byteCount, 12)
         XCTAssertEqual(scheduler.queuedCount, 2)
 
         let next = scheduler.consumed(token: scheduled[0].token, generation: 0)
-        XCTAssertEqual(next.map(\.data), [Data(repeating: 3, count: 4)])
+        XCTAssertEqual(next.map(\.data), [Data(repeating: 2, count: 4)])
+        let final = scheduler.consumed(token: next[0].token, generation: 0)
+        XCTAssertEqual(final.map(\.data), [Data(repeating: 3, count: 4)])
         XCTAssertLessThanOrEqual(scheduler.byteCount, scheduler.maximumBytes)
+    }
+
+    func testPlaybackSchedulerDistinguishesPausedAndStaleEnqueue() {
+        var scheduler = PlaybackScheduler(maximumBytes: 16, maximumScheduledBytes: 8, paused: true)
+        guard case .paused = scheduler.enqueueResult(Data(repeating: 1, count: 4), generation: 0) else {
+            return XCTFail("expected paused")
+        }
+        guard case .staleGeneration = scheduler.enqueueResult(Data(repeating: 2, count: 4), generation: 1) else {
+            return XCTFail("expected stale generation")
+        }
+        XCTAssertEqual(scheduler.byteCount, 0)
     }
 
     func testPlaybackSchedulerRejectsChunkLargerThanScheduledLimit() {

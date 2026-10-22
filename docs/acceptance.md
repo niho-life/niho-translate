@@ -2,7 +2,7 @@
 
 ## 自動テスト
 
-- provider fake transport: 5秒/240,000-byte connect前queue、`session.created`、初期設定ACK待ち、bufferedAmount未観測時の直列health ACK/timeout/cleanup、input append、audio metadata一致、分割delta、短い末尾PCM、unknown control、backpressure、connect/close timeout
+- provider fake transport: 5秒/240,000-byte connect前queue、`session.created`、初期設定ACK待ち、bufferedAmount未観測時の直列health ACK/timeout/cleanup、input append、audio metadata一致、2-byte/1,002-byte/大きい分割deltaの即時・byte完全一致、close重複なし、unknown control、backpressure、connect/close timeout
 - protocol: client入力frame alignment、provider出力even-byte alignment、canonical base64、exact schema、host room control、identity、strict error enum、deliveryId/client.ack、初回unauthorized例外
 - room: host 1 + guest 1、第三者拒否、2分席予約、generation、readyとstartの分離、guest control拒否、90分寿命、opposite listener必須、mic mute中のlistening
 - room-core focus policy: 推定時刻・idle解放の単体検証（v1 relayは音声配信のゲートに使わない。4人overlap優先はv2 TODO）
@@ -10,7 +10,8 @@
 - delivery: 全media/non-mediaの単調deliveryId、未ACK 512 KiB/128 event、ACKなしlistener停止、未来ACK拒否、duplicate/old connection ACK fence、listener喪失時provider停止
 - presence: 接続/ready/切断/5秒同期、定常sync中の音声継続、single-flight、current admission照合、遅い旧世代応答の破棄、sync失敗fail-closed、明示resume、15秒client ping timeout、restart後の旧grant拒否
 - lease: 最大15秒、`maxInputAudioMs`、relay受信時刻による200 ms burst/rate、300 ms usage遅延中の音声継続、pending/in-flight snapshot、stop/renew時のfinal drain、同lease ledger、usage/renew各single-flight、結果不明snapshotの非再送とlease quarantine、renew中継続、期限後renew拒否、遅い旧source応答の破棄、新lease IDでの明示resume
-- Swift core/Session fake: input/output PCM、captionOnly、room/identity/ping/ACK encoding、delivery順序/reset、bounded outgoing/inflight、self/speaker generation gate、connection/task callback fence、Native ping single-flight/pong/timeout/旧callback gate、private route no-auto-resumeと明示capture再開、退出後のsocket/audio/permission/send完了破棄、同一Sessionのticket再試行拒否、PCM先行予約、96,000-byte上限、pause/reset、旧completion fence
+- Swift core/Session fake: input/output PCM、captionOnly、room/identity/ping/ACK encoding、delivery順序/reset、bounded outgoing/inflight、self/speaker generation gate、connection/task callback fence、Native ping single-flight/pong/timeout/旧callback gate、private route no-auto-resumeと明示capture再開、退出後のsocket/audio/permission/send完了破棄、同一Sessionのticket再試行拒否、PCM先行予約、96,000-byte上限で既存queue順序を保つoverflow拒否、現行overflowのterminal停止、pause/reset、旧completion/overflow fence
+- offline WAV replay: fake transportを注入した実provider adapterの可変長delta byte完全一致と、`127.0.0.1`のreference mock relayへ実WebSocket 2接続した双方向protocol/ACK/byte順序/自己配信なし。WAVなしはメモリ上の非音声PCM、WAV指定時は最大60秒をffmpegで24 kHz mono PCM16へ変換し、音声・字幕・path・filename・PCMを保存または表示しない
 - SwiftPM macOS build/testとiOS 15.5 simulator SDK source/example typecheck
 
 ## 公開前に手動で残る項目
@@ -50,3 +51,5 @@
 8. 実回線で約15秒の接続期限、5秒間隔Native ping、最大約10秒のpong期限、無音継続、network切替後の切断表示とfresh ticket + 新Sessionでの復帰
 
 上記が完了するまで、実API接続・課金・iPhone実機10秒受入・60分連続運転・実回線watchdogを成功とは報告しません。構文check、pure gate、fake transport成功も実通信成功の代用にしません。watchdogの合格はtransport生存確認に限り、翻訳成功の合格とは分けます。
+
+`npm run test:wav` のoffline/mock成功も、翻訳の意味精度、実OpenAI API、Swift `AVAudioConverter`、実iPhone、イヤフォンへ届くlatency、実機10秒受入、60分連続運転の成功を意味しません。reference mockのechoは翻訳結果または耳に届くlatencyとして扱いません。

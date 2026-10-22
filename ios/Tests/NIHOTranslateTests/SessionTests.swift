@@ -42,6 +42,10 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(session.microphonePermission, .undetermined)
         XCTAssertEqual(session.config.sourceLanguage, .en)
         XCTAssertEqual(session.config.targetLanguage, .ja)
+        session.leave()
+        XCTAssertFalse(session.explicitConsent)
+        XCTAssertEqual(session.connectionStatus, .disconnected)
+        XCTAssertFalse(session.canCapture)
     }
 
     func testConfigurationRejectsMidRoomEquivalentLanguagePair() {

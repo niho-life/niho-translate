@@ -232,6 +232,8 @@ public final class TranslateSession: ObservableObject {
     }
 
     public func leave() {
+        explicitConsent = false
+        readinessGate.setExplicitConsent(false)
         if let selfGeneration { audio.stop(generation: selfGeneration) }
         playbackGeneration = audio.invalidatePlayback()
         client.disconnect()
@@ -252,6 +254,7 @@ public final class TranslateSession: ObservableObject {
             readinessGate.setExplicitConsent(explicitConsent)
             readinessGate.setMicrophoneGranted(microphonePermission == .granted)
             micMuted = false
+            connectionStatus = .connecting
             try client.connect(url: config.relayURL, ticket: config.scopedTicket)
         } catch {
             connectionStatus = .failed

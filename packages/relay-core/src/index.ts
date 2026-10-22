@@ -637,9 +637,10 @@ export class RelayOrchestrator {
       return;
     }
     const nowMs = this.clock.now();
-    if (!connection.room.mayPlayAudio(connection.admission.participantId, connection.generation, nowMs)) {
-      return;
-    }
+    if (!connection.room.canCapture(connection.admission.participantId, connection.generation)) return;
+    // v1 has one source per target language. Quiet speech may never trigger the
+    // device energy detector, so focus is timing metadata, never an audio gate.
+    connection.room.mayPlayAudio(connection.admission.participantId, connection.generation, nowMs);
     const speechEndedAtMs = connection.room.estimatedSpeechEndedAt(
       connection.admission.participantId,
       connection.generation,
@@ -668,10 +669,7 @@ export class RelayOrchestrator {
       return;
     }
     const atMs = this.clock.now();
-    const captionOnly = connection.room.captionOnlyFor(
-      connection.admission.participantId,
-      connection.generation,
-    );
+    const captionOnly = false; // v1 has no competing source for a target language.
     if (!connection.room.addCaption({
       speakerId: connection.admission.participantId,
       generation: connection.generation,

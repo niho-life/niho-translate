@@ -258,6 +258,26 @@ describe("relay orchestration", () => {
     await relay.dispose();
   });
 
+  it("delivers quiet speech output without a local energy speech-start event", async () => {
+    const factory = new Factory();
+    const relay = new RelayOrchestrator(verifier, authority(), factory, new Clock());
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const guest = connected.get("guest-en")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: 1,
+    }));
+    factory.sessions[0]!.sink.onOutputAudio(audio);
+    factory.sessions[0]!.sink.onOutputTranscript("Quiet speech");
+    await relay.tick();
+    expect(guest.peer.events.some(event => event.type === "audio")).toBe(true);
+    expect(guest.peer.events.find(event => event.type === "caption.delta"))
+      .toMatchObject({ captionOnly: false, delta: "Quiet speech" });
+    expect(host.peer.events.some(event => event.type === "audio")).toBe(false);
+    await relay.dispose();
+  });
+
   it("rejects guest room control and does not treat ready as start", async () => {
     const testAuthority = authority();
     const control = vi.spyOn(testAuthority, "controlRoom");

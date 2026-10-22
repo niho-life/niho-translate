@@ -1,0 +1,27 @@
+{
+  "name": "niho-translate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "vitest run --maxWorkers=2 --no-file-parallelism",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261022.1",
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "jose": "6.2.13",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11",
+    "ws": "8.22.0"
+  }
+}

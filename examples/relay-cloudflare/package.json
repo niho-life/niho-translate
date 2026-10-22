@@ -1,0 +1,12 @@
+{
+  "name": "@niho-translate/relay-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@niho-translate/authority-http": "0.1.0",
+    "@niho-translate/provider-openai": "0.1.0",
+    "@niho-translate/relay-core": "0.1.0"
+  }
+}

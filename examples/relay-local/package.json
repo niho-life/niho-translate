@@ -1,0 +1,8 @@
+{
+  "name":"@niho-translate/relay-local",
+  "version":"0.1.0",
+  "private":true,
+  "type":"module",
+  "scripts":{"start":"node --experimental-transform-types src/server.ts"},
+  "dependencies":{"@niho-translate/authority-http":"0.1.0","@niho-translate/protocol":"0.1.0","@niho-translate/room-core":"0.1.0","@niho-translate/relay-core":"0.1.0","ws":"8.22.0"}
+}

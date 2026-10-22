@@ -5,7 +5,7 @@
 - 合成fixtureと秘密なしのGitHub-hosted CIを使う。外部PRを資格情報付きで実行せず、社内runnerへ接続しない。
 - 独自コードの再利用許諾は付けない。勝手にOSSライセンスを追加しない。依存ライブラリの権利表示を維持する。
 - 認可と予算の正本はホスト側。クライアントのrole、participant ID、残額の申告を信用せず、短命でscopeされた資格とleaseを検証する。
-- 最大4人、初期は日英とiPhone。話者別の音声を保ち、必要な聞き手だけに翻訳を共有する。
+- v1は日英2人（host 1 + guest 1）とiPhone。最大4人・同時発話優先はv2。話者別の音声を保ち、必要な聞き手だけに翻訳を共有する。
 - 音声・字幕をファイル、DB、ログ、crash reportへ保存しない。退出と世代更新後の遅着イベントを破棄する。
 - 実装担当はimplementation-routingに従う。writerは1体、workerの再委任・commit・push・PRは禁止。メインがレビュー・検証・外部操作を担う。
 - GitHub CLIはghNを使い、gh auth switchは使わない。ownerが指定した作成アカウントを別アカウントで代用しない。

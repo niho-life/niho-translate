@@ -1,0 +1,20 @@
+name = "niho-translate-relay-example"
+main = "src/index.ts"
+compatibility_date = "2026-10-22"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDurableObject"]
+
+[vars]
+AUTHORITY_URL = "https://authority.example.invalid/"
+TICKET_ISSUER = "https://issuer.example.invalid/"
+TICKET_AUDIENCE = "niho-translate-example"
+JWKS_URL = "https://issuer.example.invalid/.well-known/jwks.json"
+TICKET_ALGORITHM = "RS256"
+
+# Configure RELAY_SERVICE_TOKEN and OPENAI_API_KEY as encrypted Worker secrets.

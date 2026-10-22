@@ -10,7 +10,7 @@
 - delivery: 全media/non-mediaの単調deliveryId、未ACK 512 KiB/128 event、ACKなしlistener停止、未来ACK拒否、duplicate/old connection ACK fence、listener喪失時provider停止
 - presence: 接続/ready/切断/5秒同期、定常sync中の音声継続、single-flight、current admission照合、遅い旧世代応答の破棄、sync失敗fail-closed、明示resume、15秒client ping timeout、restart後の旧grant拒否
 - lease: 最大15秒、`maxInputAudioMs`、relay受信時刻による200 ms burst/rate、300 ms usage遅延中の音声継続、pending/in-flight snapshot、stop/renew時のfinal drain、同lease ledger、usage/renew各single-flight、結果不明snapshotの非再送とlease quarantine、renew中継続、期限後renew拒否、遅い旧source応答の破棄、新lease IDでの明示resume
-- Swift core: input/output PCM、captionOnly、room/identity/ping/ACK encoding、delivery順序/reset、bounded outgoing/inflight、self/speaker generation gate、connection/task callback fence、private route no-auto-resume、PCM先行予約、96,000-byte上限、pause/reset、旧completion fence
+- Swift core/Session fake: input/output PCM、captionOnly、room/identity/ping/ACK encoding、delivery順序/reset、bounded outgoing/inflight、self/speaker generation gate、connection/task callback fence、Native ping single-flight/pong/timeout/旧callback gate、private route no-auto-resumeと明示capture再開、退出後のsocket/audio/permission/send完了破棄、同一Sessionのticket再試行拒否、PCM先行予約、96,000-byte上限、pause/reset、旧completion fence
 - SwiftPM macOS build/testとiOS 15.5 simulator SDK source/example typecheck
 
 ## 公開前に手動で残る項目
@@ -47,5 +47,6 @@
 5. 実OpenAI APIで、初期設定ACK後の空の部分 `session.update`（`session.audio = {}`）を5秒ごとに繰り返してもtarget language、noise reduction、transcription設定を変えず無害であり、各回5秒以内に `session.updated` が返ること。これはtransport livenessの受入で、実translation成功とは別に確認する
 6. production single-writer routing、process restart/alarm復帰、bounded tombstone cleanup
 7. アクセシビリティ、日英文言、host/guestの実操作
+8. 実回線で約15秒の接続期限、5秒間隔Native ping、最大約10秒のpong期限、無音継続、network切替後の切断表示とfresh ticket + 新Sessionでの復帰
 
-上記が完了するまで、実API接続・課金・iPhone実機10秒受入を成功とは報告しません。構文checkやmock成功も実通信成功の代用にしません。
+上記が完了するまで、実API接続・課金・iPhone実機10秒受入・60分連続運転・実回線watchdogを成功とは報告しません。構文check、pure gate、fake transport成功も実通信成功の代用にしません。watchdogの合格はtransport生存確認に限り、翻訳成功の合格とは分けます。

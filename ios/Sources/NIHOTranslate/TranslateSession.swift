@@ -61,6 +61,61 @@ public struct TranslateCaption: Identifiable, Sendable {
     public let receivedAt: Date
 }
 
+protocol TranslateSessionTransport: AnyObject, Sendable {
+    var onEvent: (@Sendable (ServerEnvelope) -> Void)? { get set }
+    var onState: (@Sendable (TranslateProtocolClient.State) -> Void)? { get set }
+    func connect(url: URL, ticket: String) throws
+    func send(_ event: ClientEnvelope) async throws
+    func disconnect()
+}
+
+extension TranslateProtocolClient: TranslateSessionTransport {}
+
+protocol TranslateSessionAudio: AnyObject, Sendable {
+    var onAudioBatch: (@Sendable (Data) -> Void)? { get set }
+    var onSpeechBoundary: (@Sendable (TranslateAudioEngine.SpeechBoundary) -> Void)? { get set }
+    var onRouteRequiresPause: (@Sendable () -> Void)? { get set }
+    func preparePlayback(generation: Int) throws -> Int
+    func resumeCapture(generation: Int) throws -> Int
+    func stop(generation: Int)
+    func pauseCapture(generation: Int)
+    func enqueueTranslatedPCM(_ data: Data, playbackGeneration: Int)
+    func invalidatePlayback() -> Int
+    func setListeningPaused(_ paused: Bool) -> Int
+}
+
+extension TranslateAudioEngine: TranslateSessionAudio {}
+
+@MainActor
+protocol MicrophonePermissionProviding: AnyObject {
+    var permission: TranslateSession.MicrophonePermission { get }
+    func request(_ completion: @escaping @Sendable (Bool) -> Void)
+}
+
+@MainActor
+private final class SystemMicrophonePermissionProvider: MicrophonePermissionProviding {
+    var permission: TranslateSession.MicrophonePermission {
+        #if os(iOS)
+        switch AVAudioSession.sharedInstance().recordPermission {
+        case .granted: return .granted
+        case .denied: return .denied
+        case .undetermined: return .undetermined
+        @unknown default: return .denied
+        }
+        #else
+        return .denied
+        #endif
+    }
+
+    func request(_ completion: @escaping @Sendable (Bool) -> Void) {
+        #if os(iOS)
+        AVAudioSession.sharedInstance().requestRecordPermission(completion)
+        #else
+        completion(false)
+        #endif
+    }
+}
+
 @MainActor
 public final class TranslateSession: ObservableObject {
     public enum ConnectionStatus: Sendable, Equatable {
@@ -91,14 +146,20 @@ public final class TranslateSession: ObservableObject {
 
     public let config: TranslateConnectionConfig
 
-    private let client: TranslateProtocolClient
-    private let audio: TranslateAudioEngine
+    private let client: any TranslateSessionTransport
+    private let audio: any TranslateSessionAudio
+    private let permissionProvider: any MicrophonePermissionProviding
     private var selfGeneration: Int?
     private var participantById: [String: ParticipantEnvelope] = [:]
     private var speakerGate = SpeakerGenerationGate()
     private var readinessGate = ReadinessGate()
     private var playbackGeneration = 0
     private var captureRunning = false
+    private var relayCanCapture = false
+    private var privateRoutePaused = false
+    private var ticketAttempted = false
+    private var terminal = false
+    private var lifecycleGeneration = 0
     private var captionTimer: Timer?
 
     public init(
@@ -109,9 +170,30 @@ public final class TranslateSession: ObservableObject {
         self.config = config
         self.client = client
         self.audio = audio
+        self.permissionProvider = SystemMicrophonePermissionProvider()
+        finishInitialization()
+    }
+
+    init(
+        config: TranslateConnectionConfig,
+        transport: any TranslateSessionTransport,
+        audio: any TranslateSessionAudio,
+        permissionProvider: any MicrophonePermissionProviding
+    ) {
+        self.config = config
+        self.client = transport
+        self.audio = audio
+        self.permissionProvider = permissionProvider
+        finishInitialization()
+    }
+
+    private func finishInitialization() {
         bindCallbacks()
         captionTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.pruneCaptions() }
+            Task { @MainActor in
+                guard let self, !self.terminal else { return }
+                self.pruneCaptions()
+            }
         }
     }
 
@@ -120,20 +202,24 @@ public final class TranslateSession: ObservableObject {
     }
 
     public func setExplicitConsent(_ consented: Bool) {
+        guard !terminal else { return }
+        if !consented && ticketAttempted {
+            leave()
+            return
+        }
         explicitConsent = consented
         readinessGate.setExplicitConsent(consented)
         if !consented {
             micMuted = true
-            if let selfGeneration { audio.pauseCapture(generation: selfGeneration) }
+            stopCapture()
             if connectionStatus == .connected { send(.capturePause) }
         }
         sendReadyIfEligible()
     }
 
     public func requestPermissionAndConnect() {
-        guard explicitConsent, !roomEnded else { return }
-        #if os(iOS)
-        switch AVAudioSession.sharedInstance().recordPermission {
+        guard explicitConsent, !roomEnded, !terminal, !ticketAttempted else { return }
+        switch permissionProvider.permission {
         case .granted:
             microphonePermission = .granted
             readinessGate.setMicrophoneGranted(true)
@@ -142,24 +228,20 @@ public final class TranslateSession: ObservableObject {
             microphonePermission = .denied
             readinessGate.setMicrophoneGranted(false)
         case .undetermined:
-            AVAudioSession.sharedInstance().requestRecordPermission { [weak self] allowed in
-                DispatchQueue.main.async {
-                    guard let self else { return }
+            let generation = lifecycleGeneration
+            permissionProvider.request { [weak self] allowed in
+                Task { @MainActor in
+                    guard let self, self.isActive(generation) else { return }
                     self.microphonePermission = allowed ? .granted : .denied
                     self.readinessGate.setMicrophoneGranted(allowed)
                     if allowed { self.connect() }
                 }
             }
-        @unknown default:
-            microphonePermission = .denied
-            readinessGate.setMicrophoneGranted(false)
         }
-        #else
-        microphonePermission = .denied
-        #endif
     }
 
     public func startRoom() {
+        guard !terminal, connectionStatus == .connected else { return }
         guard config.role == .host else {
             errorCode = "HOST_ONLY"
             return
@@ -168,6 +250,7 @@ public final class TranslateSession: ObservableObject {
     }
 
     public func pauseRoom() {
+        guard !terminal, connectionStatus == .connected else { return }
         guard config.role == .host else {
             errorCode = "HOST_ONLY"
             return
@@ -176,6 +259,7 @@ public final class TranslateSession: ObservableObject {
     }
 
     public func resumeRoom() {
+        guard !terminal, connectionStatus == .connected else { return }
         guard config.role == .host else {
             errorCode = "HOST_ONLY"
             return
@@ -184,6 +268,7 @@ public final class TranslateSession: ObservableObject {
     }
 
     public func endRoom() {
+        guard !terminal, connectionStatus == .connected else { return }
         guard config.role == .host else {
             errorCode = "HOST_ONLY"
             return
@@ -192,20 +277,42 @@ public final class TranslateSession: ObservableObject {
     }
 
     public func setMicMuted(_ muted: Bool) {
-        micMuted = muted
+        guard !terminal, connectionStatus == .connected else { return }
         if muted {
+            micMuted = true
+            captureRunning = false
             if let selfGeneration { audio.pauseCapture(generation: selfGeneration) }
             send(.capturePause)
         } else {
-            guard explicitConsent, microphonePermission == .granted else {
+            guard
+                explicitConsent,
+                microphonePermission == .granted,
+                let selfGeneration,
+                !roomPaused,
+                !roomEnded
+            else {
                 micMuted = true
                 return
             }
-            send(.captureResume)
+            do {
+                playbackGeneration = try audio.preparePlayback(generation: selfGeneration)
+                if relayCanCapture {
+                    playbackGeneration = try audio.resumeCapture(generation: selfGeneration)
+                    captureRunning = true
+                }
+                privateRoutePaused = false
+                canCapture = relayCanCapture
+                micMuted = false
+                clearPrivateRouteError()
+                send(.captureResume)
+            } catch {
+                pauseForPrivateRouteLoss(sendPause: true)
+            }
         }
     }
 
     public func setListeningPaused(_ paused: Bool) {
+        guard !terminal, connectionStatus == .connected else { return }
         listeningPaused = paused
         if paused {
             playbackGeneration = audio.setListeningPaused(true)
@@ -221,17 +328,24 @@ public final class TranslateSession: ObservableObject {
             return
         }
         do {
-            _ = audio.setListeningPaused(false)
             playbackGeneration = try audio.preparePlayback(generation: selfGeneration)
-            if canCapture && !micMuted { startCaptureIfPossible() }
+            playbackGeneration = audio.setListeningPaused(false)
+            listeningPaused = false
+            privateRoutePaused = false
+            canCapture = relayCanCapture
+            clearPrivateRouteError()
+            if relayCanCapture && !micMuted { startCaptureIfPossible() }
         } catch {
-            listeningPaused = true
-            playbackGeneration = audio.setListeningPaused(true)
-            errorCode = "PRIVATE_AUDIO_ROUTE_REQUIRED"
+            pauseForPrivateRouteLoss(sendPause: true)
         }
     }
 
     public func leave() {
+        guard !terminal else { return }
+        terminal = true
+        lifecycleGeneration &+= 1
+        captionTimer?.invalidate()
+        captionTimer = nil
         explicitConsent = false
         readinessGate.setExplicitConsent(false)
         if let selfGeneration { audio.stop(generation: selfGeneration) }
@@ -244,11 +358,14 @@ public final class TranslateSession: ObservableObject {
         guard
             explicitConsent,
             microphonePermission == .granted,
-            connectionStatus == .disconnected || connectionStatus == .failed,
-            !roomEnded
+            connectionStatus == .disconnected,
+            !roomEnded,
+            !terminal,
+            !ticketAttempted
         else {
             return
         }
+        ticketAttempted = true
         do {
             readinessGate.resetConnection()
             readinessGate.setExplicitConsent(explicitConsent)
@@ -257,20 +374,17 @@ public final class TranslateSession: ObservableObject {
             connectionStatus = .connecting
             try client.connect(url: config.relayURL, ticket: config.scopedTicket)
         } catch {
-            connectionStatus = .failed
-            errorCode = "CONNECT_FAILED"
+            failConnection(code: "CONNECT_FAILED")
         }
     }
 
     private func bindCallbacks() {
         client.onState = { [weak self] state in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.terminal else { return }
                 switch state {
                 case .disconnected:
-                    self.connectionStatus = .disconnected
-                    self.readinessGate.setTransportConnected(false)
-                    self.stopAudioSession()
+                    if self.ticketAttempted { self.failConnection(code: "CONNECTION_LOST") }
                 case .connecting:
                     self.connectionStatus = .connecting
                     self.readinessGate.setTransportConnected(false)
@@ -279,24 +393,41 @@ public final class TranslateSession: ObservableObject {
                     self.readinessGate.setTransportConnected(true)
                     self.sendReadyIfEligible()
                 case .failed:
-                    self.connectionStatus = .failed
-                    self.readinessGate.setTransportConnected(false)
-                    self.stopAudioSession()
+                    self.failConnection(code: "CONNECTION_LOST")
                 }
             }
         }
         client.onEvent = { [weak self] event in
-            Task { @MainActor in self?.handle(event) }
+            Task { @MainActor in
+                guard
+                    let self,
+                    !self.terminal,
+                    self.connectionStatus == .connecting || self.connectionStatus == .connected
+                else { return }
+                self.handle(event)
+            }
         }
         audio.onAudioBatch = { [weak self] data in
             Task { @MainActor in
-                guard let self, self.canCapture, !self.micMuted else { return }
+                guard
+                    let self,
+                    !self.terminal,
+                    self.connectionStatus == .connected,
+                    self.canCapture,
+                    !self.micMuted
+                else { return }
                 self.send(.audio(data, atMs: Self.nowMs()))
             }
         }
         audio.onSpeechBoundary = { [weak self] boundary in
             Task { @MainActor in
-                guard let self, self.canCapture, !self.micMuted else { return }
+                guard
+                    let self,
+                    !self.terminal,
+                    self.connectionStatus == .connected,
+                    self.canCapture,
+                    !self.micMuted
+                else { return }
                 switch boundary {
                 case .start(let atMs):
                     self.send(.speechStart(atMs))
@@ -307,12 +438,8 @@ public final class TranslateSession: ObservableObject {
         }
         audio.onRouteRequiresPause = { [weak self] in
             Task { @MainActor in
-                guard let self else { return }
-                self.micMuted = true
-                self.listeningPaused = true
-                self.canCapture = false
-                self.playbackGeneration = self.audio.setListeningPaused(true)
-                self.send(.capturePause)
+                guard let self, !self.terminal else { return }
+                self.pauseForPrivateRouteLoss(sendPause: true)
             }
         }
     }
@@ -363,7 +490,8 @@ public final class TranslateSession: ObservableObject {
             }
             participants = participantById.values.sorted { $0.participantId < $1.participantId }
         case "route":
-            canCapture = event.canCapture == true
+            relayCanCapture = event.canCapture == true
+            canCapture = relayCanCapture && !privateRoutePaused
             if canCapture && !micMuted {
                 startCaptureIfPossible()
             } else {
@@ -412,23 +540,26 @@ public final class TranslateSession: ObservableObject {
     private func startCaptureIfPossible() {
         guard
             let selfGeneration,
+            connectionStatus == .connected,
             explicitConsent,
             microphonePermission == .granted,
             !micMuted,
             !roomPaused,
             !roomEnded,
-            !captureRunning
+            !captureRunning,
+            relayCanCapture,
+            !privateRoutePaused,
+            !terminal
         else {
             return
         }
         do {
             playbackGeneration = try audio.resumeCapture(generation: selfGeneration)
             captureRunning = true
+            canCapture = true
+            clearPrivateRouteError()
         } catch {
-            micMuted = true
-            canCapture = false
-            errorCode = "PRIVATE_AUDIO_ROUTE_REQUIRED"
-            send(.capturePause)
+            pauseForPrivateRouteLoss(sendPause: true)
         }
     }
 
@@ -443,12 +574,7 @@ public final class TranslateSession: ObservableObject {
         do {
             playbackGeneration = try audio.preparePlayback(generation: generation)
         } catch {
-            micMuted = true
-            listeningPaused = true
-            canCapture = false
-            playbackGeneration = audio.setListeningPaused(true)
-            errorCode = "PRIVATE_AUDIO_ROUTE_REQUIRED"
-            send(.capturePause)
+            pauseForPrivateRouteLoss(sendPause: true)
         }
     }
 
@@ -494,21 +620,23 @@ public final class TranslateSession: ObservableObject {
         }
     }
 
-    private func stopAudioSession() {
-        if let selfGeneration { audio.stop(generation: selfGeneration) }
-        playbackGeneration = audio.invalidatePlayback()
-        captureRunning = false
-    }
-
     private func send(_ event: ClientEnvelope) {
-        Task {
+        guard !terminal, connectionStatus == .connected else { return }
+        let generation = lifecycleGeneration
+        Task { [weak self] in
+            guard let self, self.isActive(generation), self.connectionStatus == .connected else {
+                return
+            }
             do {
-                try await client.send(event)
+                try await self.client.send(event)
             } catch {
-                await MainActor.run {
-                    self.errorCode = "SEND_FAILED"
-                    self.stopCapture()
+                guard self.isActive(generation), self.connectionStatus == .connected else {
+                    return
                 }
+                if self.errorCode == nil {
+                    self.errorCode = "SEND_FAILED"
+                }
+                self.stopCapture()
             }
         }
     }
@@ -516,6 +644,13 @@ public final class TranslateSession: ObservableObject {
     private func failProtocol() {
         errorCode = "INVALID_MESSAGE"
         leave()
+    }
+
+    private func failConnection(code: String) {
+        let reason = errorCode == "PRIVATE_AUDIO_ROUTE_REQUIRED" ? code : (errorCode ?? code)
+        leave()
+        connectionStatus = .failed
+        errorCode = reason
     }
 
     private func pruneCaptions() {
@@ -529,13 +664,42 @@ public final class TranslateSession: ObservableObject {
         roomPaused = false
         canCapture = false
         micMuted = true
+        listeningPaused = true
         captureRunning = false
+        relayCanCapture = false
+        privateRoutePaused = true
         readinessGate.resetConnection()
         selfGeneration = nil
         participantById.removeAll(keepingCapacity: false)
         speakerGate.removeAll()
         participants = []
         captions = []
+    }
+
+    private func pauseForPrivateRouteLoss(sendPause: Bool) {
+        if let selfGeneration {
+            audio.stop(generation: selfGeneration)
+        }
+        captureRunning = false
+        privateRoutePaused = true
+        micMuted = true
+        listeningPaused = true
+        canCapture = false
+        playbackGeneration = audio.setListeningPaused(true)
+        if errorCode == nil || errorCode == "PRIVATE_AUDIO_ROUTE_REQUIRED" {
+            errorCode = "PRIVATE_AUDIO_ROUTE_REQUIRED"
+        }
+        if sendPause { send(.capturePause) }
+    }
+
+    private func clearPrivateRouteError() {
+        if errorCode == "PRIVATE_AUDIO_ROUTE_REQUIRED" {
+            errorCode = nil
+        }
+    }
+
+    private func isActive(_ generation: Int) -> Bool {
+        !terminal && lifecycleGeneration == generation
     }
 
     private static func nowMs() -> Int64 {

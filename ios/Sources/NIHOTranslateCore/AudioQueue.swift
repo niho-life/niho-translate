@@ -130,6 +130,49 @@ public struct ConnectionCallbackGate: Sendable {
     }
 }
 
+/// Tracks the single native ping that is allowed to wait for a pong on a connection.
+/// Dispatch deadlines remain responsible for elapsed time; this gate only rejects stale
+/// connection, pong, and timeout callbacks.
+public struct NativePingWatchdogGate: Sendable {
+    private var connectionToken: UUID?
+    private var pendingPingToken: UUID?
+
+    public init() {}
+
+    public mutating func reset(connectionToken: UUID) {
+        self.connectionToken = connectionToken
+        pendingPingToken = nil
+    }
+
+    public mutating func cancel() {
+        connectionToken = nil
+        pendingPingToken = nil
+    }
+
+    public mutating func beginPing(connectionToken candidate: UUID) -> UUID? {
+        guard connectionToken == candidate, pendingPingToken == nil else { return nil }
+        let token = UUID()
+        pendingPingToken = token
+        return token
+    }
+
+    public mutating func receivePong(connectionToken candidate: UUID, pingToken: UUID) -> Bool {
+        guard connectionToken == candidate, pendingPingToken == pingToken else { return false }
+        pendingPingToken = nil
+        return true
+    }
+
+    public mutating func expire(connectionToken candidate: UUID, pingToken: UUID) -> Bool {
+        guard connectionToken == candidate, pendingPingToken == pingToken else { return false }
+        pendingPingToken = nil
+        return true
+    }
+
+    public func isWaiting(connectionToken candidate: UUID) -> Bool {
+        connectionToken == candidate && pendingPingToken != nil
+    }
+}
+
 public struct SpeakerGenerationGate: Sendable {
     private var generations: [String: Int] = [:]
 

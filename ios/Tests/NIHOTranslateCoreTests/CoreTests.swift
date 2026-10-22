@@ -203,6 +203,42 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(gate.accepts(connectionToken: newConnection, taskToken: newTask))
     }
 
+    func testNativePingWatchdogAllowsOneInflightAndAcceptsCurrentPong() {
+        let connection = UUID()
+        var gate = NativePingWatchdogGate()
+        gate.reset(connectionToken: connection)
+
+        let ping = gate.beginPing(connectionToken: connection)
+        XCTAssertNotNil(ping)
+        XCTAssertNil(gate.beginPing(connectionToken: connection))
+        XCTAssertTrue(gate.isWaiting(connectionToken: connection))
+        XCTAssertTrue(gate.receivePong(connectionToken: connection, pingToken: ping!))
+        XCTAssertFalse(gate.isWaiting(connectionToken: connection))
+        XCTAssertFalse(gate.receivePong(connectionToken: connection, pingToken: ping!))
+        XCTAssertNotNil(gate.beginPing(connectionToken: connection))
+    }
+
+    func testNativePingWatchdogRejectsOldPongAndOldDeadlineAfterReconnect() {
+        let oldConnection = UUID()
+        let currentConnection = UUID()
+        var gate = NativePingWatchdogGate()
+        gate.reset(connectionToken: oldConnection)
+        let oldPing = gate.beginPing(connectionToken: oldConnection)!
+
+        gate.reset(connectionToken: currentConnection)
+        let currentPing = gate.beginPing(connectionToken: currentConnection)!
+        XCTAssertFalse(gate.receivePong(connectionToken: oldConnection, pingToken: oldPing))
+        XCTAssertFalse(gate.expire(connectionToken: oldConnection, pingToken: oldPing))
+        XCTAssertTrue(gate.isWaiting(connectionToken: currentConnection))
+        XCTAssertTrue(gate.expire(connectionToken: currentConnection, pingToken: currentPing))
+        XCTAssertFalse(gate.isWaiting(connectionToken: currentConnection))
+
+        gate.cancel()
+        XCTAssertFalse(gate.receivePong(connectionToken: currentConnection, pingToken: currentPing))
+        XCTAssertFalse(gate.expire(connectionToken: currentConnection, pingToken: currentPing))
+        XCTAssertNil(gate.beginPing(connectionToken: currentConnection))
+    }
+
     func testOnlyInitialUnauthorizedMayOmitDeliveryId() throws {
         let unauthorized = try JSONSerialization.data(withJSONObject: [
             "v": 1,

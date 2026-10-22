@@ -24,6 +24,8 @@ TranslateView(config: config)
 
 source/target languageはroom途中で変更しません。変更時はprivate authorityで再admitし、新しいroom/epochへ接続してください。
 
+`TranslateSession`は接続試行1回に使います。退出、接続失敗、接続後の同意取消後は同じinstanceを再接続せず、ホスト側で新しいscoped ticketとSessionを用意して明示的に入り直します。回線の復帰やイヤフォンの再接続だけでは、マイクを自動再開しません。詳細は[統合手順](docs/integration.md)を確認してください。
+
 ## Reference relay
 
 ```sh

@@ -6,6 +6,19 @@ public struct PlaybackReservation: Sendable {
     public let data: Data
 }
 
+public enum PlaybackEnqueueResult: Sendable {
+    case accepted([PlaybackReservation])
+    case staleGeneration
+    case paused
+    case invalid
+    case overflow
+
+    public var reservations: [PlaybackReservation] {
+        if case .accepted(let reservations) = self { return reservations }
+        return []
+    }
+}
+
 public struct PlaybackScheduler: Sendable {
     public let maximumBytes: Int
     public let maximumScheduledBytes: Int
@@ -37,19 +50,20 @@ public struct PlaybackScheduler: Sendable {
     public var scheduledCount: Int { scheduled.count }
 
     public mutating func enqueue(_ data: Data, generation candidate: Int) -> [PlaybackReservation] {
-        guard candidate == generation,
-              !paused,
-              !data.isEmpty,
-              data.count <= maximumScheduledBytes else {
-            return []
-        }
-        while byteCount + data.count > maximumBytes, !queued.isEmpty {
-            queuedBytes -= queued.removeFirst().count
-        }
-        guard byteCount + data.count <= maximumBytes else { return [] }
+        enqueueResult(data, generation: candidate).reservations
+    }
+
+    public mutating func enqueueResult(
+        _ data: Data,
+        generation candidate: Int
+    ) -> PlaybackEnqueueResult {
+        guard candidate == generation else { return .staleGeneration }
+        guard !paused else { return .paused }
+        guard !data.isEmpty, data.count <= maximumScheduledBytes else { return .invalid }
+        guard byteCount + data.count <= maximumBytes else { return .overflow }
         queued.append(data)
         queuedBytes += data.count
-        return reserveAvailable()
+        return .accepted(reserveAvailable())
     }
 
     public mutating func consumed(token: Int, generation candidate: Int) -> [PlaybackReservation] {

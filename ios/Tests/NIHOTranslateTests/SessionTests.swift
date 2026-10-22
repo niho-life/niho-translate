@@ -56,6 +56,7 @@ private final class FakeAudio: TranslateSessionAudio, @unchecked Sendable {
     var onAudioBatch: (@Sendable (Data) -> Void)?
     var onSpeechBoundary: (@Sendable (TranslateAudioEngine.SpeechBoundary) -> Void)?
     var onRouteRequiresPause: (@Sendable () -> Void)?
+    var onPlaybackOverflow: (@Sendable (Int) -> Void)?
     var prepareCount = 0
     var resumeCount = 0
     var pauseCount = 0
@@ -94,6 +95,10 @@ private final class FakeAudio: TranslateSessionAudio, @unchecked Sendable {
 
     func loseRoute() {
         onRouteRequiresPause?()
+    }
+
+    func overflow(generation: Int? = nil) {
+        onPlaybackOverflow?(generation ?? playbackGeneration)
     }
 }
 
@@ -393,6 +398,125 @@ final class SessionTests: XCTestCase {
 
         XCTAssertEqual(session.errorCode, "LEASE_EXPIRED")
         XCTAssertEqual(audio.resumeCount, 2)
+    }
+
+    func testCurrentPlaybackOverflowStopsOnceAndRequiresFreshSession() async throws {
+        let transport = FakeTransport()
+        let audio = FakeAudio()
+        let session = TranslateSession(
+            config: try config(), transport: transport, audio: audio,
+            permissionProvider: FakePermissionProvider(.granted)
+        )
+        session.setExplicitConsent(true)
+        session.requestPermissionAndConnect()
+        transport.emit(.connected)
+        transport.emit(try event([
+            "v": 1, "type": "session.identity", "deliveryId": 1,
+            "participantId": "self", "generation": 1,
+        ]))
+        await settle()
+
+        audio.overflow()
+        audio.overflow()
+        await settle()
+
+        XCTAssertEqual(session.connectionStatus, .failed)
+        XCTAssertEqual(session.errorCode, "PLAYBACK_BACKPRESSURE")
+        XCTAssertFalse(session.explicitConsent)
+        XCTAssertTrue(session.micMuted)
+        XCTAssertTrue(session.listeningPaused)
+        XCTAssertEqual(transport.disconnectCount, 1)
+        XCTAssertEqual(audio.stopCount, 1)
+        XCTAssertEqual(transport.connectCount, 1)
+        session.setExplicitConsent(true)
+        session.requestPermissionAndConnect()
+        XCTAssertEqual(transport.connectCount, 1)
+
+        let freshTransport = FakeTransport()
+        let fresh = TranslateSession(
+            config: try config(), transport: freshTransport, audio: FakeAudio(),
+            permissionProvider: FakePermissionProvider(.granted)
+        )
+        fresh.setExplicitConsent(true)
+        fresh.requestPermissionAndConnect()
+        XCTAssertEqual(freshTransport.connectCount, 1)
+    }
+
+    func testStalePlaybackOverflowAndCallbackAfterLeaveAreIgnored() async throws {
+        let transport = FakeTransport()
+        let audio = FakeAudio()
+        let session = TranslateSession(
+            config: try config(), transport: transport, audio: audio,
+            permissionProvider: FakePermissionProvider(.granted)
+        )
+        session.setExplicitConsent(true)
+        session.requestPermissionAndConnect()
+        transport.emit(.connected)
+        await settle()
+
+        audio.overflow(generation: -1)
+        await settle()
+        XCTAssertEqual(session.connectionStatus, .connected)
+        XCTAssertNil(session.errorCode)
+
+        session.leave()
+        let disconnectCount = transport.disconnectCount
+        let stopCount = audio.stopCount
+        audio.overflow()
+        await settle()
+        XCTAssertEqual(session.connectionStatus, .disconnected)
+        XCTAssertNil(session.errorCode)
+        XCTAssertEqual(transport.disconnectCount, disconnectCount)
+        XCTAssertEqual(audio.stopCount, stopCount)
+    }
+
+    func testPlaybackOverflowDoesNotOverwriteExistingBudgetError() async throws {
+        let transport = FakeTransport()
+        let audio = FakeAudio()
+        let session = TranslateSession(
+            config: try config(), transport: transport, audio: audio,
+            permissionProvider: FakePermissionProvider(.granted)
+        )
+        session.setExplicitConsent(true)
+        session.requestPermissionAndConnect()
+        transport.emit(.connected)
+        transport.emit(try event([
+            "v": 1, "type": "error", "deliveryId": 1,
+            "code": "LEASE_EXPIRED", "fatal": false,
+        ]))
+        await settle()
+
+        audio.overflow()
+        await settle()
+
+        XCTAssertEqual(session.connectionStatus, .failed)
+        XCTAssertEqual(session.errorCode, "LEASE_EXPIRED")
+        XCTAssertEqual(transport.disconnectCount, 1)
+    }
+
+    func testLatePlaybackOverflowDoesNotOverwriteFatalRelayError() async throws {
+        let transport = FakeTransport()
+        let audio = FakeAudio()
+        let session = TranslateSession(
+            config: try config(), transport: transport, audio: audio,
+            permissionProvider: FakePermissionProvider(.granted)
+        )
+        session.setExplicitConsent(true)
+        session.requestPermissionAndConnect()
+        transport.emit(.connected)
+        transport.emit(try event([
+            "v": 1, "type": "error", "deliveryId": 1,
+            "code": "PROVIDER_ERROR", "fatal": true,
+        ]))
+        await settle()
+        let disconnectCount = transport.disconnectCount
+
+        audio.overflow()
+        await settle()
+
+        XCTAssertEqual(session.connectionStatus, .disconnected)
+        XCTAssertEqual(session.errorCode, "PROVIDER_ERROR")
+        XCTAssertEqual(transport.disconnectCount, disconnectCount)
     }
 
     func testTransportFailureCannotBeRevivedByLateConnectedOrMediaCallbacks() async throws {

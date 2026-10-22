@@ -75,6 +75,7 @@ protocol TranslateSessionAudio: AnyObject, Sendable {
     var onAudioBatch: (@Sendable (Data) -> Void)? { get set }
     var onSpeechBoundary: (@Sendable (TranslateAudioEngine.SpeechBoundary) -> Void)? { get set }
     var onRouteRequiresPause: (@Sendable () -> Void)? { get set }
+    var onPlaybackOverflow: (@Sendable (Int) -> Void)? { get set }
     func preparePlayback(generation: Int) throws -> Int
     func resumeCapture(generation: Int) throws -> Int
     func stop(generation: Int)
@@ -379,6 +380,7 @@ public final class TranslateSession: ObservableObject {
     }
 
     private func bindCallbacks() {
+        let callbackLifecycleGeneration = lifecycleGeneration
         client.onState = { [weak self] state in
             Task { @MainActor in
                 guard let self, !self.terminal else { return }
@@ -440,6 +442,16 @@ public final class TranslateSession: ObservableObject {
             Task { @MainActor in
                 guard let self, !self.terminal else { return }
                 self.pauseForPrivateRouteLoss(sendPause: true)
+            }
+        }
+        audio.onPlaybackOverflow = { [weak self] generation in
+            Task { @MainActor in
+                guard
+                    let self,
+                    self.isActive(callbackLifecycleGeneration),
+                    self.playbackGeneration == generation
+                else { return }
+                self.failPlaybackBackpressure()
             }
         }
     }
@@ -648,6 +660,13 @@ public final class TranslateSession: ObservableObject {
 
     private func failConnection(code: String) {
         let reason = errorCode == "PRIVATE_AUDIO_ROUTE_REQUIRED" ? code : (errorCode ?? code)
+        leave()
+        connectionStatus = .failed
+        errorCode = reason
+    }
+
+    private func failPlaybackBackpressure() {
+        let reason = errorCode ?? "PLAYBACK_BACKPRESSURE"
         leave()
         connectionStatus = .failed
         errorCode = reason

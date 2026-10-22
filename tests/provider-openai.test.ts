@@ -103,26 +103,38 @@ describe("OpenAI provider adapter", () => {
     expect(sink.onFatal).not.toHaveBeenCalled();
   });
 
-  it("reassembles non-frame-aligned even PCM and emits the final short tail", () => {
+  it("emits every even PCM delta immediately and splits only oversized deltas", () => {
     const transport = new FakeTransport();
     const sink = createSink();
     new OpenAITranslationProvider("key", "ja", { connect: () => transport }, sink, new FakeClock());
     transport.open();
     transport.message(JSON.stringify({ type: "session.created", session: {} }));
     transport.message(JSON.stringify({ type: "session.updated", session: {} }));
-    const bytes = Buffer.alloc(AUDIO_BATCH_BYTES + 2, 7);
-    transport.message(JSON.stringify({
-      type: "session.output_audio.delta",
-      delta: bytes.subarray(0, 1_002).toString("base64"),
-    }));
-    transport.message(JSON.stringify({
-      type: "session.output_audio.delta",
-      delta: bytes.subarray(1_002).toString("base64"),
-    }));
-    expect(sink.onOutputAudio).toHaveBeenCalledTimes(1);
+    const deltas = [
+      Buffer.from([1, 2]),
+      Buffer.alloc(1_002, 3),
+      Buffer.alloc(AUDIO_BATCH_BYTES * 2 + 14, 4),
+      Buffer.from([5, 6]),
+    ];
+    for (const delta of deltas) {
+      const countBefore = (sink.onOutputAudio as ReturnType<typeof vi.fn>).mock.calls.length;
+      transport.message(JSON.stringify({
+        type: "session.output_audio.delta",
+        delta: delta.toString("base64"),
+      }));
+      const emitted = (sink.onOutputAudio as ReturnType<typeof vi.fn>).mock.calls
+        .slice(countBefore)
+        .map(call => Buffer.from(call[0], "base64"));
+      expect(Buffer.concat(emitted)).toEqual(delta);
+      expect(emitted.every(bytes => bytes.length <= AUDIO_BATCH_BYTES && bytes.length % 2 === 0)).toBe(true);
+    }
+    const callsBeforeClose = (sink.onOutputAudio as ReturnType<typeof vi.fn>).mock.calls.length;
+    const allOutput = (sink.onOutputAudio as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => Buffer.from(call[0], "base64"));
+    expect(Buffer.concat(allOutput)).toEqual(Buffer.concat(deltas));
     transport.message(JSON.stringify({ type: "session.closed" }));
-    expect(sink.onOutputAudio).toHaveBeenCalledTimes(2);
-    expect(Buffer.from((sink.onOutputAudio as ReturnType<typeof vi.fn>).mock.calls[1]![0], "base64")).toHaveLength(2);
+    transport.closed();
+    expect(sink.onOutputAudio).toHaveBeenCalledTimes(callsBeforeClose);
   });
 
   it("ignores bounded unknown non-media controls but rejects unknown media and binary data", () => {

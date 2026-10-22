@@ -13,6 +13,7 @@
   "scripts": {
     "test": "vitest run --maxWorkers=2 --no-file-parallelism",
     "test:loopback": "node scripts/check-local-relay.mjs",
+    "test:wav": "node --disable-warning=ExperimentalWarning --experimental-transform-types scripts/check-wav-replay.mts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test"
   },

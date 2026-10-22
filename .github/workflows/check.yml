@@ -17,6 +17,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm run test:loopback
+      - run: npm --silent run test:wav -- --seconds 1
       - run: npm -C examples/relay-cloudflare run typecheck
   swift-core:
     runs-on: macos-15

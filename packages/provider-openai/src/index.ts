@@ -47,7 +47,6 @@ export class OpenAITranslationProvider {
   private configured = false;
   private readonly preopen: string[] = [];
   private preopenBytes = 0;
-  private outputBytes = Buffer.alloc(0);
   private ignoredControlEvents = 0;
   private connectTimeout: unknown;
   private healthTimer: unknown;
@@ -274,14 +273,8 @@ export class OpenAITranslationProvider {
       this.fail("PROVIDER_INVALID_PAYLOAD");
       return;
     }
-    if (this.outputBytes.length + chunk.byteLength > MAX_PROVIDER_BUFFERED_BYTES) {
-      this.fail("BACKPRESSURE");
-      return;
-    }
-    this.outputBytes = Buffer.concat([this.outputBytes, chunk]);
-    while (this.outputBytes.length >= AUDIO_BATCH_BYTES) {
-      this.sink.onOutputAudio(this.outputBytes.subarray(0, AUDIO_BATCH_BYTES).toString("base64"));
-      this.outputBytes = this.outputBytes.subarray(AUDIO_BATCH_BYTES);
+    for (let offset = 0; offset < chunk.byteLength; offset += AUDIO_BATCH_BYTES) {
+      this.sink.onOutputAudio(chunk.subarray(offset, offset + AUDIO_BATCH_BYTES).toString("base64"));
     }
   }
 
@@ -357,11 +350,6 @@ export class OpenAITranslationProvider {
     }
     this.clearHealthTimer();
     this.awaitingUpdate = undefined;
-    // Provider deltas are not frame-aligned. Preserve the final even-byte PCM tail.
-    if (this.outputBytes.length > 0) {
-      this.sink.onOutputAudio(this.outputBytes.toString("base64"));
-    }
-    this.outputBytes = Buffer.alloc(0);
     this.preopen.length = 0;
     this.preopenBytes = 0;
     this.state = "closed";

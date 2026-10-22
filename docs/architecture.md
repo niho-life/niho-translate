@@ -4,7 +4,7 @@ v1はマイク付きイヤフォン用のnear-field noise reductionを指定し�
 
 `packages/protocol` はJSON protocol v1とruntime validationの正本です。client入力は24 kHz mono PCM16の20 ms frame整数倍・最大200 msです。provider出力はdelta境界がframeと一致しないため、even-byte PCMとして検証し、relay/client間では最大200 msへ分割します。字幕は改行・tabを許可し、その他のcontrol文字と4,096文字超を拒否します。
 
-`packages/provider-openai` はinjected WebSocket factory/clockを使います。接続中の最初の音声は5秒分（240,000 bytes）までqueueし、`session.created` 後の初期設定に対する `session.updated` を待ってから順番にflushします。5秒のconnect/config timeoutはこのACKまで有効です。transport bufferを観測できる場合は192,000 bytesでfail closedし、観測できない場合は同時に1件だけ空の部分 `session.update` を5秒間隔で送るcontrol ACK watchdogを使います。既知media eventとoptional PCM metadataを厳格に検証し、`rate_limits.updated` とboundedな未知non-media controlだけを無視します。出力は `session.output_audio.delta.delta` を読み、4,800-byte chunkへまとめ、close時のeven-byte末尾も短いPCMとして通知します。watchdogはtransport livenessだけを示し、翻訳成功は示しません。
+`packages/provider-openai` はinjected WebSocket factory/clockを使います。接続中の最初の音声は5秒分（240,000 bytes）までqueueし、`session.created` 後の初期設定に対する `session.updated` を待ってから順番にflushします。5秒のconnect/config timeoutはこのACKまで有効です。transport bufferを観測できる場合は192,000 bytesでfail closedし、観測できない場合は同時に1件だけ空の部分 `session.update` を5秒間隔で送るcontrol ACK watchdogを使います。既知media eventとoptional PCM metadataを厳格に検証し、`rate_limits.updated` とboundedな未知non-media controlだけを無視します。出力は `session.output_audio.delta.delta` ごとにeven-byte PCMを検証し、各deltaを最大4,800 bytesへ順序どおり分割して端数も直ちに通知します。次deltaやcloseを待つ出力bufferは持ちません。watchdogはtransport livenessだけを示し、翻訳成功は示しません。
 
 `packages/room-core` は外部I/Oを持たないroom state machineです。v1はhost 1席 + guest 1席で、切断後2分の席予約、generation、明示host control、最大90分、字幕2分を管理します。`client.ready` は開始ではなく、相手言語のready listenerがいなければcaptureできません。v1は出力言語ごとに話者が1人のため、音声の配信条件は有効なcapture・相手listener・現行providerです。端末energy/focusは推定時刻だけに使い、小声や10秒を超えた有効な翻訳音声を捨てません。room-coreのfocus policyはv2の検討基盤として保持しています。
 
@@ -16,7 +16,7 @@ usageはleaseごとにpendingとin-flight snapshotを分離します。報告中
 
 `TranslateSession.leave()` は冪等なterminal操作です。退出後のsocket、permission、audio、send完了はlifecycle fenceで破棄し、消費済みscoped ticketを同じSessionから再試行しません。通信復帰はホスト側がfresh scoped ticketで新しい`TranslateSession`を生成する操作です。route喪失またはinterruptionではcapture/playbackを停止してmute/listening pauseを保持し、private input/outputを再検証する利用者の明示操作だけが再開できます。
 
-翻訳PCM再生はCoreの`PlaybackScheduler`がqueued + scheduledを合計96,000 bytes以内に保ち、そのうち最大19,200 bytesを先行予約します。`AVAudioPlayerNode`の`.dataConsumed`で予約枠を補充するため、100 ms片ごとに`.dataPlayedBack`を待たず、前片の再生終了前に次片をscheduleできます。pause、exit、private route喪失、stopはqueueと予約を破棄してgenerationを更新し、旧generation/tokenのcallbackは新queueのbyte数を減らしません。Bluetooth HFP・有線headsetのprivate route制約とiOS 15.5互換を維持します。
+翻訳PCM再生はCoreの`PlaybackScheduler`がqueued + scheduledを合計96,000 bytes以内に保ち、そのうち最大19,200 bytesを先行予約します。`AVAudioPlayerNode`の`.dataConsumed`で予約枠を補充するため、100 ms片ごとに`.dataPlayedBack`を待たず、前片の再生終了前に次片をscheduleできます。上限超過は既存queueを削除せず新しいaudioを拒否し、AudioEngineからplayback generation付きでSessionへ通知します。SessionはMainActor上でlifecycleとgenerationを再検証し、現行overflowだけを`PLAYBACK_BACKPRESSURE`としてterminal停止します。再開にはfresh scoped ticketと新しいSessionが必要です。pause、exit、private route喪失、stopはqueueと予約を破棄してgenerationを更新し、旧generation/token/overflow callbackは現Sessionを変更しません。Bluetooth HFP・有線headsetのprivate route制約とiOS 15.5互換を維持します。
 
 ## Latencyの測定区間
 

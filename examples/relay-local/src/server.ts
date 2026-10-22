@@ -25,7 +25,7 @@ import type { AuthorityRoomState } from "../../../packages/room-core/src/index.t
 
 const mode = process.env.RELAY_MODE ?? "mock";
 const port = Number(process.env.PORT ?? "8787");
-if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("INVALID_PORT");
+if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("INVALID_PORT");
 
 function mockClaims(token: string): TicketClaims {
   const allowed = new Set(["host-ja", "guest-en"]);
@@ -305,7 +305,9 @@ function main(): void {
     pendingMessages.length = 0;
   });
   server.listen(port, "127.0.0.1", () => {
-    process.stdout.write(`relay-local listening on 127.0.0.1:${port} (${mode})\n`);
+    const address = server.address();
+    const listeningPort = typeof address === "object" && address ? address.port : port;
+    process.stdout.write(`relay-local listening on 127.0.0.1:${listeningPort} (${mode})\n`);
   });
   const shutdown = () => {
     void relay.dispose().finally(() => server.close());

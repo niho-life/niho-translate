@@ -34,12 +34,14 @@ public final class TranslateAudioEngine: @unchecked Sendable {
     private var running = false
     private var captureActive = false
     private var listeningPaused = false
+    private var playbackOverflowNotified = false
     private var speaking = false
     private var silentSinceMs: Int64?
 
     public var onAudioBatch: (@Sendable (Data) -> Void)?
     public var onSpeechBoundary: (@Sendable (SpeechBoundary) -> Void)?
     public var onRouteRequiresPause: (@Sendable () -> Void)?
+    public var onPlaybackOverflow: (@Sendable (Int) -> Void)?
 
     public init() {
         engine.attach(player)
@@ -140,8 +142,16 @@ public final class TranslateAudioEngine: @unchecked Sendable {
             else {
                 return
             }
-            let reservations = self.playbackScheduler.enqueue(data, generation: playbackGeneration)
-            self.schedulePlayback(reservations)
+            switch self.playbackScheduler.enqueueResult(data, generation: playbackGeneration) {
+            case .accepted(let reservations):
+                self.schedulePlayback(reservations)
+            case .overflow:
+                guard !self.playbackOverflowNotified else { return }
+                self.playbackOverflowNotified = true
+                self.onPlaybackOverflow?(playbackGeneration)
+            case .staleGeneration, .paused, .invalid:
+                return
+            }
         }
     }
 
@@ -149,6 +159,7 @@ public final class TranslateAudioEngine: @unchecked Sendable {
     public func invalidatePlayback() -> Int {
         pipeline.sync {
             playbackGeneration += 1
+            playbackOverflowNotified = false
             player.stop()
             playbackScheduler.reset(generation: playbackGeneration, paused: listeningPaused)
             if running && !listeningPaused { player.play() }
@@ -162,6 +173,7 @@ public final class TranslateAudioEngine: @unchecked Sendable {
             listeningPaused = paused
             if paused {
                 playbackGeneration += 1
+                playbackOverflowNotified = false
                 player.stop()
                 playbackScheduler.reset(generation: playbackGeneration, paused: true)
             } else if running {
@@ -224,6 +236,7 @@ public final class TranslateAudioEngine: @unchecked Sendable {
         captureConverter = nil
         captureBytes.removeAll(keepingCapacity: false)
         playbackGeneration += 1
+        playbackOverflowNotified = false
         playbackScheduler.reset(generation: playbackGeneration, paused: listeningPaused)
         running = false
         captureActive = false
@@ -404,6 +417,7 @@ public final class TranslateAudioEngine: @unchecked Sendable {
     public var onAudioBatch: (@Sendable (Data) -> Void)?
     public var onSpeechBoundary: (@Sendable (SpeechBoundary) -> Void)?
     public var onRouteRequiresPause: (@Sendable () -> Void)?
+    public var onPlaybackOverflow: (@Sendable (Int) -> Void)?
 
     public init() {}
     public func preparePlayback(generation: Int) throws -> Int { throw TranslateProtocolError.invalidField }

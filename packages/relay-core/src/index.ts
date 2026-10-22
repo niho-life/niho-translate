@@ -116,6 +116,7 @@ export interface Authority {
   syncPresence(input: Readonly<PresenceSyncRequest>): Promise<PresenceSyncResponse>;
   acquireLease(input: { roomId: string; roomEpoch: string; participantId: string; admissionId: string; generation: number }): Promise<BudgetLease>;
   renewLease(input: { leaseId: string; roomId: string; roomEpoch: string; participantId: string; admissionId: string; generation: number }): Promise<BudgetLease>;
+  /** Must accept usage reserved under an old lease ID after renewLease grants a new ID. */
   reportUsage(event: UsageEvent): Promise<void>;
 }
 
@@ -155,8 +156,14 @@ interface LeaseState {
   inputAudioMs: number;
   availableAudioMs: number;
   lastAudioAtMs: number;
+  reportedUsageMs: number;
   pendingUsageMs: number;
+  inFlightUsageMs: number;
+  usageInFlight?: Promise<boolean>;
+  usageFailed: boolean;
+  finalDrainThroughMs: number;
   lastUsageReportAtMs: number;
+  renewInFlight: boolean;
 }
 
 interface Connection {
@@ -182,6 +189,7 @@ export class RelayOrchestrator {
   private readonly tombstones = new Map<string, number>();
   private readonly authorityStateByRoom = new Map<string, AuthorityRoomState>();
   private readonly lastPresenceSyncAtByRoom = new Map<string, number>();
+  private readonly presenceInFlightByRoom = new Map<string, Promise<void>>();
   private readonly serial = new SerialDispatcher();
   private readonly timer: unknown;
   private readonly normalizedConfig: Required<Omit<RelayConfig, "room">> & { room: RoomConfig };
@@ -363,9 +371,10 @@ export class RelayOrchestrator {
       connection.lastPingAtMs = this.clock.now();
       return Promise.resolve();
     }
+    const receivedAtMs = this.clock.now();
     return this.enqueueClientOperation(connection, roomKey, async () => {
       if (this.getConnection(roomId, roomEpoch, participantId, generation) !== connection) return;
-      await this.handleClientEvent(connection, parsed);
+      await this.handleClientEvent(connection, parsed, receivedAtMs);
     });
   }
 
@@ -413,9 +422,14 @@ export class RelayOrchestrator {
     this.tombstones.clear();
     this.authorityStateByRoom.clear();
     this.lastPresenceSyncAtByRoom.clear();
+    this.presenceInFlightByRoom.clear();
   }
 
-  private async handleClientEvent(connection: Connection, event: ClientEvent): Promise<void> {
+  private async handleClientEvent(
+    connection: Connection,
+    event: ClientEvent,
+    receivedAtMs = this.clock.now(),
+  ): Promise<void> {
     const nowMs = this.clock.now();
     const { participantId, roomId, roomEpoch } = connection.admission;
     switch (event.type) {
@@ -465,11 +479,12 @@ export class RelayOrchestrator {
         }
         await this.ensureSource(connection);
         if (connection.dropIncoming) return;
-        const currentNow = this.clock.now();
+        const currentNow = receivedAtMs;
+        const processedAtMs = this.clock.now();
         if (
           !connection.provider
           || !connection.lease
-          || connection.lease.value.expiresAtMs <= currentNow
+          || connection.lease.value.expiresAtMs <= processedAtMs
         ) {
           await this.blockSource(connection, "lease-unavailable", "LEASE_EXPIRED");
           return;
@@ -489,8 +504,7 @@ export class RelayOrchestrator {
           connection.lease.pendingUsageMs >= USAGE_BATCH_AUDIO_MS
           || currentNow - connection.lease.lastUsageReportAtMs >= 1_000
         ) {
-          const reported = await this.flushUsage(connection, connection.lease);
-          if (!reported) await this.failClosedForAuthority(connection.room);
+          this.startUsageReport(connection, connection.lease, connection.providerToken);
         }
         return;
       }
@@ -510,6 +524,10 @@ export class RelayOrchestrator {
       connection.peer.send({ v: 1, type: "error", code: "NOT_READY", fatal: false });
       return;
     }
+    // A presence snapshot taken before this control must not overwrite its result.
+    this.presenceInFlightByRoom.delete(
+      this.roomKey(connection.admission.roomId, connection.admission.roomEpoch),
+    );
     let response: { roomEpoch: string; state: AuthorityRoomState };
     try {
       response = await this.bounded(this.authority.controlRoom({
@@ -586,16 +604,31 @@ export class RelayOrchestrator {
       ) {
         return;
       }
-      connection.lease = this.rememberLease(connection, lease, acquiredAt);
+      const nextLease = this.rememberLease(connection, lease, acquiredAt);
+      if (nextLease.usageFailed) throw new Error("LEASE_USAGE_QUARANTINED");
+      connection.lease = nextLease;
       const providerToken = connection.providerToken + 1;
       connection.providerToken = providerToken;
-      connection.provider = this.providers.create(
-        connection.admission.targetLanguage,
-        this.makeSink(connection, providerToken),
-      );
+      this.openProvider(connection, providerToken);
     } catch {
       await this.failClosedForAuthority(connection.room);
     }
+  }
+
+  private openProvider(connection: Connection, providerToken: number): void {
+    if (
+      connection.provider
+      || connection.providerToken !== providerToken
+      || !this.connectionIsCurrent(connection)
+      || connection.blocked
+      || !connection.room.canCapture(connection.admission.participantId, connection.generation)
+    ) {
+      return;
+    }
+    connection.provider = this.providers.create(
+      connection.admission.targetLanguage,
+      this.makeSink(connection, providerToken),
+    );
   }
 
   private makeSink(connection: Connection, providerToken: number): ProviderSink {
@@ -606,14 +639,14 @@ export class RelayOrchestrator {
       },
       onOutputTranscript: delta => {
         void this.serial.run(roomKey, () => {
-          if (this.providerIsCurrent(connection, providerToken)) {
+          if (this.providerOutputIsCurrent(connection, providerToken)) {
             this.fanoutCaption(connection, connection.admission.targetLanguage, delta);
           }
         });
       },
       onInputTranscript: delta => {
         void this.serial.run(roomKey, () => {
-          if (this.providerIsCurrent(connection, providerToken)) {
+          if (this.providerOutputIsCurrent(connection, providerToken)) {
             this.fanoutCaption(connection, connection.admission.sourceLanguage, delta);
           }
         });
@@ -629,7 +662,7 @@ export class RelayOrchestrator {
   }
 
   private handleProviderAudio(connection: Connection, providerToken: number, audio: string): void {
-    if (!this.providerIsCurrent(connection, providerToken)) return;
+    if (!this.providerOutputIsCurrent(connection, providerToken)) return;
     try {
       decodeOutputPcmBase64(audio);
     } catch {
@@ -709,17 +742,11 @@ export class RelayOrchestrator {
     room.tick(nowMs);
     for (const connection of this.connectionsForRoom(room)) {
       if (nowMs - connection.lastPingAtMs >= CLIENT_PING_TIMEOUT_MS) {
-        await this.disconnect(connection, 4008, "client-ping-timeout");
+        await this.disconnect(connection, 4008, "client-ping-timeout", true, false);
       }
     }
     if (nowMs - (this.lastPresenceSyncAtByRoom.get(roomKey) ?? -PRESENCE_SYNC_MS) >= PRESENCE_SYNC_MS) {
-      await this.syncPresence(roomKey, room, true);
-    }
-    const afterSyncMs = this.clock.now();
-    for (const connection of this.connectionsForRoom(room)) {
-      if (afterSyncMs - connection.lastPingAtMs >= CLIENT_PING_TIMEOUT_MS) {
-        await this.disconnect(connection, 4008, "client-ping-timeout");
-      }
+      this.startPresenceSync(roomKey, room);
     }
     if (room.isEnded()) {
       await this.syncLifecycleState(roomKey, room);
@@ -740,7 +767,7 @@ export class RelayOrchestrator {
         if (connection.lease.value.expiresAtMs <= nowMs) {
           await this.blockSource(connection, "lease-expired", "LEASE_EXPIRED");
         } else if (connection.lease.value.expiresAtMs - nowMs <= 5_000) {
-          await this.renewLease(connection, connection.lease);
+          this.startRenewLease(connection, connection.lease);
         }
       }
       this.sendRoomState(connection);
@@ -794,6 +821,7 @@ export class RelayOrchestrator {
     if (!force && nowMs - (this.lastPresenceSyncAtByRoom.get(roomKey) ?? -PRESENCE_SYNC_MS) < PRESENCE_SYNC_MS) {
       return true;
     }
+    if (force) this.presenceInFlightByRoom.delete(roomKey);
     const participants = this.connectionsForRoom(room).map(connection => ({
       participantId: connection.admission.participantId,
       admissionId: connection.admissionId,
@@ -812,6 +840,88 @@ export class RelayOrchestrator {
       await this.failClosedForAuthority(room);
       return false;
     }
+    await this.applyPresenceResponse(roomKey, room, response);
+    return true;
+  }
+
+  private startPresenceSync(roomKey: string, room: RoomActor): void {
+    if (this.presenceInFlightByRoom.has(roomKey)) return;
+    const participants = this.presenceParticipants(room);
+    const operation = this.bounded(this.authority.syncPresence({
+      roomId: room.roomId,
+      roomEpoch: room.roomEpoch,
+      participants,
+    }), "AUTHORITY_TIMEOUT");
+    this.lastPresenceSyncAtByRoom.set(roomKey, this.clock.now());
+    let completion!: Promise<void>;
+    completion = operation.then(
+      response => this.serial.run(roomKey, async () => {
+        if (this.presenceInFlightByRoom.get(roomKey) !== completion) return;
+        this.presenceInFlightByRoom.delete(roomKey);
+        if (
+          this.disposed
+          || this.rooms.get(roomKey) !== room
+          || !this.samePresenceParticipants(participants, this.presenceParticipants(room))
+        ) {
+          return;
+        }
+        try {
+          this.assertPresenceResponse(response, room.roomEpoch);
+        } catch {
+          await this.failClosedForAuthority(room);
+          return;
+        }
+        const completedAt = this.clock.now();
+        for (const connection of this.connectionsForRoom(room)) {
+          if (completedAt - connection.lastPingAtMs >= CLIENT_PING_TIMEOUT_MS) {
+            await this.disconnect(connection, 4008, "client-ping-timeout", true, false);
+          }
+        }
+        await this.applyPresenceResponse(roomKey, room, response);
+      }),
+      () => this.serial.run(roomKey, async () => {
+        if (this.presenceInFlightByRoom.get(roomKey) !== completion) return;
+        this.presenceInFlightByRoom.delete(roomKey);
+        if (
+          !this.disposed
+          && this.rooms.get(roomKey) === room
+          && this.samePresenceParticipants(participants, this.presenceParticipants(room))
+        ) {
+          await this.failClosedForAuthority(room);
+        }
+      }),
+    );
+    this.presenceInFlightByRoom.set(roomKey, completion);
+  }
+
+  private presenceParticipants(room: RoomActor): PresenceParticipant[] {
+    return this.connectionsForRoom(room).map(connection => ({
+      participantId: connection.admission.participantId,
+      admissionId: connection.admissionId,
+      generation: connection.generation,
+      ready: room.isReady(connection.admission.participantId, connection.generation),
+    }));
+  }
+
+  private samePresenceParticipants(
+    left: PresenceParticipant[],
+    right: PresenceParticipant[],
+  ): boolean {
+    return left.length === right.length && left.every((participant, index) => {
+      const candidate = right[index];
+      return candidate !== undefined
+        && participant.participantId === candidate.participantId
+        && participant.admissionId === candidate.admissionId
+        && participant.generation === candidate.generation
+        && participant.ready === candidate.ready;
+    });
+  }
+
+  private async applyPresenceResponse(
+    roomKey: string,
+    room: RoomActor,
+    response: PresenceSyncResponse,
+  ): Promise<void> {
     this.lastPresenceSyncAtByRoom.set(roomKey, this.clock.now());
     this.authorityStateByRoom.set(roomKey, response.state);
     room.restoreAuthorityState(response.state);
@@ -830,8 +940,10 @@ export class RelayOrchestrator {
     this.broadcastRoutes(room);
     if (response.state === "ended") {
       this.markTombstone(roomKey, this.clock.now());
+      for (const connection of this.connectionsForRoom(room)) {
+        await this.disconnect(connection, 1000, "room-ended", true, false);
+      }
     }
-    return true;
   }
 
   private async failClosedForAuthority(room: RoomActor): Promise<void> {
@@ -865,47 +977,108 @@ export class RelayOrchestrator {
     }
   }
 
-  private async renewLease(connection: Connection, current: LeaseState): Promise<void> {
+  private startRenewLease(connection: Connection, current: LeaseState): void {
+    if (current.renewInFlight || current.usageFailed) return;
     const token = connection.providerToken;
-    const oldLeaseId = current.value.leaseId;
-    if (!await this.flushUsage(connection, current)) {
-      await this.failClosedForAuthority(connection.room);
+    this.launchRenewLease(connection, current, token);
+  }
+
+  private launchRenewLease(
+    connection: Connection,
+    current: LeaseState,
+    token: number,
+  ): void {
+    if (
+      current.renewInFlight
+      || current.usageFailed
+      || this.clock.now() >= current.value.expiresAtMs
+      || !this.providerIsCurrent(connection, token)
+      || connection.lease !== current
+    ) {
       return;
     }
-    try {
-      const next = await this.bounded(this.authority.renewLease({
-        leaseId: oldLeaseId,
-        roomId: connection.admission.roomId,
-        roomEpoch: connection.admission.roomEpoch,
-        participantId: connection.admission.participantId,
-        admissionId: connection.admissionId,
-        generation: connection.generation,
-      }), "AUTHORITY_TIMEOUT");
-      const completedAt = this.clock.now();
-      if (completedAt >= current.value.expiresAtMs) throw new Error("LEASE_EXPIRED_DURING_RENEWAL");
-      this.assertLease(next, completedAt);
-      if (
-        !this.providerIsCurrent(connection, token)
-        || connection.lease !== current
-        || current.value.leaseId !== oldLeaseId
-      ) {
-        return;
-      }
-      connection.lease = this.rememberLease(connection, next, completedAt, current.availableAudioMs);
-    } catch {
-      await this.failClosedForAuthority(connection.room);
-    }
+    current.renewInFlight = true;
+    const oldLeaseId = current.value.leaseId;
+    const oldExpiresAtMs = current.value.expiresAtMs;
+    const roomKey = this.roomKey(connection.admission.roomId, connection.admission.roomEpoch);
+    const operation = this.bounded(this.authority.renewLease({
+      leaseId: oldLeaseId,
+      roomId: connection.admission.roomId,
+      roomEpoch: connection.admission.roomEpoch,
+      participantId: connection.admission.participantId,
+      admissionId: connection.admissionId,
+      generation: connection.generation,
+    }), "AUTHORITY_TIMEOUT");
+    void operation.then(
+      next => this.serial.run(roomKey, async () => {
+        current.renewInFlight = false;
+        const completedAt = this.clock.now();
+        if (
+          this.disposed
+          || !this.providerIsCurrent(connection, token)
+          || connection.lease !== current
+          || current.value.leaseId !== oldLeaseId
+        ) {
+          return;
+        }
+        if (completedAt >= oldExpiresAtMs) {
+          await this.blockSource(connection, "lease-expired-during-renewal", "LEASE_EXPIRED");
+          return;
+        }
+        try {
+          this.assertLease(next, completedAt);
+          const nextLease = this.rememberLease(
+            connection,
+            next,
+            completedAt,
+            current.availableAudioMs,
+          );
+          if (nextLease.usageFailed) throw new Error("LEASE_USAGE_QUARANTINED");
+          connection.lease = nextLease;
+          if (nextLease !== current) {
+            current.finalDrainThroughMs = Math.max(
+              current.finalDrainThroughMs,
+              current.inputAudioMs,
+            );
+            this.startUsageReport(connection, current, token);
+          }
+        } catch {
+          await this.failClosedForAuthority(connection.room);
+        }
+      }),
+      () => this.serial.run(roomKey, async () => {
+        current.renewInFlight = false;
+        if (
+          !this.disposed
+          && this.providerIsCurrent(connection, token)
+          && connection.lease === current
+          && current.value.leaseId === oldLeaseId
+        ) {
+          await this.failClosedForAuthority(connection.room);
+        }
+      }),
+    );
   }
 
   private rememberLease(connection: Connection, value: BudgetLease, nowMs: number, availableAudioMs = AUDIO_BURST_MS): LeaseState {
     for (const [id, state] of connection.leaseLedger) {
-      if (state.value.expiresAtMs <= nowMs) connection.leaseLedger.delete(id);
+      const finalDrainPending = state.finalDrainThroughMs > state.reportedUsageMs;
+      if (
+        state.value.expiresAtMs <= nowMs
+        && !state.usageFailed
+        && !state.usageInFlight
+        && !state.renewInFlight
+        && state.pendingUsageMs <= 0
+        && !finalDrainPending
+      ) {
+        connection.leaseLedger.delete(id);
+      }
     }
     const existing = connection.leaseLedger.get(value.leaseId);
     if (existing) {
-      if (existing.value.expiresAtMs !== value.expiresAtMs || existing.value.maxInputAudioMs !== value.maxInputAudioMs) {
-        throw new Error("LEASE_ID_REUSED_WITH_DIFFERENT_LIMITS");
-      }
+      if (existing.inputAudioMs > value.maxInputAudioMs) throw new Error("LEASE_LIMIT_BELOW_USAGE");
+      existing.value = value;
+      existing.availableAudioMs = Math.min(existing.availableAudioMs, AUDIO_BURST_MS);
       return existing;
     }
     if (connection.leaseLedger.size >= 4) throw new Error("LEASE_LEDGER_FULL");
@@ -914,8 +1087,13 @@ export class RelayOrchestrator {
       inputAudioMs: 0,
       availableAudioMs: Math.min(availableAudioMs, AUDIO_BURST_MS),
       lastAudioAtMs: nowMs,
+      reportedUsageMs: 0,
       pendingUsageMs: 0,
+      inFlightUsageMs: 0,
+      usageFailed: false,
+      finalDrainThroughMs: 0,
       lastUsageReportAtMs: nowMs,
+      renewInFlight: false,
     };
     connection.leaseLedger.set(value.leaseId, state);
     return state;
@@ -933,27 +1111,63 @@ export class RelayOrchestrator {
     return true;
   }
 
-  private async flushUsage(connection: Connection, lease: LeaseState): Promise<boolean> {
-    if (lease.pendingUsageMs <= 0) return true;
-    const seconds = lease.pendingUsageMs / 1_000;
-    lease.pendingUsageMs = 0;
+  private startUsageReport(
+    connection: Connection,
+    lease: LeaseState,
+    providerToken: number,
+  ): void {
+    if (lease.usageFailed) return;
+    if (lease.usageInFlight) return;
+    if (lease.pendingUsageMs <= 0) return;
+    const finalRemainingMs = Math.max(
+      0,
+      lease.finalDrainThroughMs - lease.reportedUsageMs,
+    );
+    const snapshotMs = finalRemainingMs > 0
+      ? Math.min(lease.pendingUsageMs, finalRemainingMs)
+      : lease.pendingUsageMs;
+    lease.pendingUsageMs -= snapshotMs;
+    lease.inFlightUsageMs = snapshotMs;
     const atMs = this.clock.now();
-    try {
-      await this.bounded(this.authority.reportUsage({
+    const roomKey = this.roomKey(connection.admission.roomId, connection.admission.roomEpoch);
+    const operation = this.bounded(this.authority.reportUsage({
         roomId: connection.admission.roomId,
         roomEpoch: connection.admission.roomEpoch,
         participantId: connection.admission.participantId,
         admissionId: connection.admissionId,
         generation: connection.generation,
         leaseId: lease.value.leaseId,
-        inputAudioSeconds: seconds,
+        inputAudioSeconds: snapshotMs / 1_000,
         atMs,
-      }), "AUTHORITY_TIMEOUT");
-      lease.lastUsageReportAtMs = atMs;
-      return true;
-    } catch {
-      return false;
-    }
+      }), "AUTHORITY_TIMEOUT").then(() => true, () => false);
+    lease.usageInFlight = operation;
+    void operation.then(success => this.serial.run(roomKey, async () => {
+      if (lease.usageInFlight !== operation) return;
+      delete lease.usageInFlight;
+      lease.inFlightUsageMs = 0;
+      if (success) {
+        lease.reportedUsageMs += snapshotMs;
+        lease.lastUsageReportAtMs = atMs;
+        if (lease.reportedUsageMs >= lease.finalDrainThroughMs) {
+          lease.finalDrainThroughMs = 0;
+        }
+        if (
+          lease.finalDrainThroughMs > lease.reportedUsageMs
+          || lease.pendingUsageMs >= USAGE_BATCH_AUDIO_MS
+        ) {
+          this.startUsageReport(connection, lease, providerToken);
+        }
+        return;
+      }
+      lease.usageFailed = true;
+      if (
+        !this.disposed
+        && this.connectionIsCurrent(connection)
+        && connection.providerToken === providerToken
+      ) {
+        await this.failClosedForAuthority(connection.room);
+      }
+    }));
   }
 
   private assertAdmission(admission: AuthorityAdmission, claims: TicketClaims): void {
@@ -1035,15 +1249,16 @@ export class RelayOrchestrator {
 
   private async stopSource(connection: Connection, _reason: string): Promise<void> {
     // Invalidate callbacks before usage drain and provider close can re-enter.
+    const providerToken = connection.providerToken;
     connection.providerToken += 1;
     const provider = connection.provider;
     const lease = connection.lease;
     delete connection.provider;
     delete connection.lease;
     connection.room.releaseFocus(connection.admission.participantId, connection.generation);
-    if (lease && !await this.flushUsage(connection, lease)) {
-      connection.blocked = true;
-      connection.peer.send({ v: 1, type: "error", code: "LEASE_DENIED", fatal: false });
+    if (lease) {
+      lease.finalDrainThroughMs = Math.max(lease.finalDrainThroughMs, lease.inputAudioMs);
+      this.startUsageReport(connection, lease, providerToken);
     }
     if (provider) await provider.close(1_000).catch(() => undefined);
   }
@@ -1087,6 +1302,17 @@ export class RelayOrchestrator {
     return !!connection.provider
       && !connection.dropIncoming
       && connection.providerToken === token
+      && this.connectionIsCurrent(connection);
+  }
+
+  private providerOutputIsCurrent(connection: Connection, token: number): boolean {
+    return this.providerIsCurrent(connection, token)
+      && !!connection.lease
+      && connection.lease.value.expiresAtMs > this.clock.now();
+  }
+
+  private connectionIsCurrent(connection: Connection): boolean {
+    return !connection.dropIncoming
       && connection.room.isCurrent(connection.admission.participantId, connection.generation)
       && this.connections.get(this.connectionKey(
         this.roomKey(connection.admission.roomId, connection.admission.roomEpoch),

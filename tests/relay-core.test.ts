@@ -41,6 +41,20 @@ class Peer implements ClientPeer {
   close(code: number, reason: string): void { this.closed = [code, reason]; }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushAsync(): Promise<void> {
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
+}
+
 async function acknowledgeLatest(
   relay: RelayOrchestrator,
   participantId: string,
@@ -407,8 +421,592 @@ describe("relay orchestration", () => {
     expect(resolveRenew).toBeDefined();
     resolveRenew!({ leaseId: "lease-2", expiresAtMs: 25_000, maxInputAudioMs: 10_000 });
     await ticking;
+    await flushAsync();
     expect(factory.sessions[0]!.closed).toBe(true);
-    expect(host.peer.events.some(event => event.type === "error" && event.code === "INTERNAL")).toBe(true);
+    expect(host.peer.events.some(event => event.type === "error" && event.code === "LEASE_EXPIRED")).toBe(true);
+    await relay.dispose();
+  });
+
+  it("keeps audio and provider output flowing while a usage report is deferred", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const reportGate = deferred<void>();
+    const usage: UsageEvent[] = [];
+    testAuthority.reportUsage = async event => {
+      usage.push(event);
+      await reportGate.promise;
+    };
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const guest = connected.get("guest-en")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    for (let index = 0; index < 10; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: 0,
+      }));
+    }
+    expect(usage).toHaveLength(1);
+    for (let index = 0; index < 3; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: 0,
+      }));
+    }
+    factory.sessions[0]!.sink.onOutputAudio(audio);
+    await relay.tick();
+
+    expect(factory.sessions[0]!.appends).toHaveLength(13);
+    expect(guest.peer.events.some(event => event.type === "audio")).toBe(true);
+    expect(host.peer.events.some(event => event.type === "error" && event.code === "AUDIO_LIMIT")).toBe(false);
+    reportGate.resolve();
+    await flushAsync();
+    await relay.dispose();
+  });
+
+  it("uses relay receive time when initial lease acquisition queues normal audio", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const leaseGate = deferred<BudgetLease>();
+    testAuthority.acquireLease = () => leaseGate.promise;
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+    const operations: Promise<void>[] = [];
+
+    for (let index = 0; index < 3; index += 1) {
+      clock.time += 100;
+      operations.push(relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: 0,
+      })));
+    }
+    await flushAsync();
+    leaseGate.resolve({ leaseId: "delayed-initial", expiresAtMs: 15_000, maxInputAudioMs: 15_000 });
+    await Promise.all(operations);
+
+    expect(factory.sessions[0]!.appends).toHaveLength(3);
+    expect(host.peer.events.some(event => event.type === "error" && event.code === "AUDIO_LIMIT")).toBe(false);
+    await relay.dispose();
+  });
+
+  it("reports exact per-lease snapshots single-flight and fails closed on report failure", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const gates = [deferred<void>(), deferred<void>()];
+    const usage: UsageEvent[] = [];
+    testAuthority.reportUsage = async event => {
+      const index = usage.push(event) - 1;
+      await gates[index]!.promise;
+    };
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    for (let index = 0; index < 20; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: clock.now(),
+      }));
+    }
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ leaseId: "lease-1", inputAudioSeconds: 1 });
+    gates[0]!.resolve();
+    await flushAsync();
+    expect(usage).toHaveLength(2);
+    expect(usage[1]).toMatchObject({ leaseId: "lease-1", inputAudioSeconds: 1 });
+
+    gates[1]!.reject(new Error("synthetic report failure"));
+    await flushAsync();
+    expect(factory.sessions[0]!.closed).toBe(true);
+    expect(host.peer.events.filter(event => event.type === "route").at(-1)).toMatchObject({
+      canCapture: false,
+      reason: "blocked",
+    });
+    const sessionCount = factory.sessions.length;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: clock.now(),
+    }));
+    expect(factory.sessions).toHaveLength(sessionCount);
+    await relay.dispose();
+  });
+
+  it("quarantines an indeterminate usage snapshot until Authority grants a new lease id", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    let grantedLeaseId = "uncertain-lease";
+    const acquire = vi.fn(async () => ({
+      leaseId: grantedLeaseId,
+      expiresAtMs: 15_000,
+      maxInputAudioMs: 15_000,
+    }));
+    const usage: UsageEvent[] = [];
+    testAuthority.acquireLease = acquire;
+    testAuthority.reportUsage = async event => {
+      usage.push(event);
+      throw new Error("response lost after Authority applied usage");
+    };
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    for (let index = 0; index < 10; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: clock.now(),
+      }));
+    }
+    await flushAsync();
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ leaseId: "uncertain-lease", inputAudioSeconds: 1 });
+    expect(factory.sessions[0]!.closed).toBe(true);
+
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.resume" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: clock.now(),
+    }));
+    await flushAsync();
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(usage).toHaveLength(1);
+    expect(factory.sessions).toHaveLength(1);
+
+    grantedLeaseId = "replacement-lease";
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.resume" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: clock.now(),
+    }));
+    expect(acquire).toHaveBeenCalledTimes(3);
+    expect(factory.sessions).toHaveLength(2);
+    expect(factory.sessions[1]!.appends).toHaveLength(1);
+    expect(usage).toHaveLength(1);
+    await relay.dispose();
+  });
+
+  it("final-drains sub-threshold usage after an in-flight snapshot without disturbing a resumed source", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const gates = [deferred<void>(), deferred<void>()];
+    const usage: UsageEvent[] = [];
+    let activeReports = 0;
+    let maximumActiveReports = 0;
+    testAuthority.reportUsage = async event => {
+      const index = usage.push(event) - 1;
+      activeReports += 1;
+      maximumActiveReports = Math.max(maximumActiveReports, activeReports);
+      await gates[index]!.promise;
+      activeReports -= 1;
+    };
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    for (let index = 0; index < 13; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: clock.now(),
+      }));
+    }
+    expect(usage).toHaveLength(1);
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.pause" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.resume" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "speech.start", atMs: clock.now(),
+    }));
+    expect(factory.sessions).toHaveLength(2);
+
+    gates[0]!.resolve();
+    await flushAsync();
+    expect(usage).toHaveLength(2);
+    expect(usage.map(event => event.inputAudioSeconds)).toEqual([1, 0.3]);
+    expect(factory.sessions[1]!.closed).toBe(false);
+    gates[1]!.resolve();
+    await flushAsync();
+    expect(usage.reduce((sum, event) => sum + event.inputAudioSeconds, 0)).toBeCloseTo(1.3);
+    expect(maximumActiveReports).toBe(1);
+    expect(factory.sessions[1]!.closed).toBe(false);
+    await relay.dispose();
+  });
+
+  it("continues during deferred presence and renew, but never revives an expired lease", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const presenceGate = deferred<ReturnType<TestAuthority["syncPresence"]> extends Promise<infer T> ? T : never>();
+    const renewGate = deferred<BudgetLease>();
+    const originalSync = testAuthority.syncPresence.bind(testAuthority);
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const guest = connected.get("guest-en")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    testAuthority.syncPresence = () => presenceGate.promise;
+    clock.time = 6_000;
+    await relay.tick();
+    clock.time += 100;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: 0,
+    }));
+    factory.sessions[0]!.sink.onOutputAudio(audio);
+    await relay.tick();
+    expect(guest.peer.events.some(event => event.type === "audio")).toBe(true);
+    expect(factory.sessions[0]!.closed).toBe(false);
+    presenceGate.resolve(await originalSync({
+      roomId: "r",
+      roomEpoch: "e",
+      participants: [
+        { participantId: "host-ja", admissionId: testAuthority.grants.get("host-ja")!, generation: host.generation, ready: true },
+        { participantId: "guest-en", admissionId: testAuthority.grants.get("guest-en")!, generation: guest.generation, ready: true },
+      ],
+    }));
+    await flushAsync();
+
+    testAuthority.syncPresence = originalSync;
+    testAuthority.renewLease = () => renewGate.promise;
+    clock.time = 11_000;
+    await relay.tick();
+    clock.time = 11_100;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: 0,
+    }));
+    expect(factory.sessions[0]!.appends).toHaveLength(2);
+
+    clock.time = 15_000;
+    await relay.tick();
+    expect(factory.sessions[0]!.closed).toBe(true);
+    renewGate.resolve({ leaseId: "late-lease", expiresAtMs: 25_000, maxInputAudioMs: 15_000 });
+    await flushAsync();
+    expect(factory.sessions).toHaveLength(1);
+    expect(host.peer.events.filter(event => event.type === "route").at(-1)).toMatchObject({
+      canCapture: false,
+      reason: "blocked",
+    });
+    await relay.dispose();
+  });
+
+  it("preserves one ledger when renewal returns the same lease id", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const usageGate = deferred<void>();
+    const renewGate = deferred<BudgetLease>();
+    const usage: UsageEvent[] = [];
+    testAuthority.acquireLease = async () => ({
+      leaseId: "continuing-lease", expiresAtMs: 15_000, maxInputAudioMs: 800,
+    });
+    const renew = vi.fn(() => renewGate.promise);
+    testAuthority.renewLease = renew;
+    testAuthority.reportUsage = async event => {
+      usage.push(event);
+      if (usage.length === 1) await usageGate.promise;
+    };
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    for (let index = 0; index < 5; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: 0,
+      }));
+    }
+    clock.time = 11_000;
+    await relay.tick();
+    await flushAsync();
+    for (let index = 0; index < 3; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: 0,
+      }));
+    }
+    usageGate.resolve();
+    await flushAsync();
+    expect(renew).toHaveBeenCalledTimes(1);
+    renewGate.resolve({ leaseId: "continuing-lease", expiresAtMs: 25_000, maxInputAudioMs: 800 });
+    await flushAsync();
+
+    clock.time += 100;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: 0,
+    }));
+    await flushAsync();
+    expect(usage.map(event => event.inputAudioSeconds)).toEqual([0.6, 0.2]);
+    expect(usage.reduce((sum, event) => sum + event.inputAudioSeconds, 0)).toBeCloseTo(0.8);
+    expect(host.peer.events.some(event => event.type === "error" && event.code === "AUDIO_LIMIT")).toBe(true);
+    await relay.dispose();
+  });
+
+  it("renews during continuous slow usage and drains old and new lease ledgers separately", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const renewGate = deferred<BudgetLease>();
+    const reportGates: Array<ReturnType<typeof deferred<void>>> = [];
+    const usage: UsageEvent[] = [];
+    let activeUsage = 0;
+    let maximumActiveUsage = 0;
+    let renewCalledAt: number | undefined;
+    const renew = vi.fn(() => {
+      renewCalledAt = clock.now();
+      return renewGate.promise;
+    });
+    testAuthority.renewLease = renew;
+    testAuthority.reportUsage = async event => {
+      usage.push(event);
+      const gate = deferred<void>();
+      reportGates.push(gate);
+      activeUsage += 1;
+      maximumActiveUsage = Math.max(maximumActiveUsage, activeUsage);
+      await gate.promise;
+      activeUsage -= 1;
+    };
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+    let releasedReports = 0;
+
+    for (let index = 0; index < 90; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: clock.now(),
+      }));
+      const current = usage.at(-1);
+      if (
+        current
+        && releasedReports < reportGates.length
+        && clock.now() - current.atMs >= 300
+      ) {
+        reportGates[releasedReports]!.resolve();
+        releasedReports += 1;
+        await flushAsync();
+      }
+    }
+    expect(clock.now()).toBe(10_000);
+    expect(reportGates.length).toBeGreaterThan(releasedReports);
+    await relay.tick();
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(renewCalledAt).toBe(10_000);
+
+    for (let index = 0; index < 3; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: clock.now(),
+      }));
+    }
+    renewGate.resolve({ leaseId: "lease-2", expiresAtMs: 25_000, maxInputAudioMs: 15_000 });
+    await flushAsync();
+    reportGates[releasedReports]!.resolve();
+    releasedReports += 1;
+    await flushAsync();
+    expect(usage.at(-1)).toMatchObject({ leaseId: "lease-1", inputAudioSeconds: 0.3 });
+    reportGates[releasedReports]!.resolve();
+    releasedReports += 1;
+    await flushAsync();
+
+    for (let index = 0; index < 10; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: clock.now(),
+      }));
+    }
+    expect(usage.at(-1)?.leaseId).toBe("lease-2");
+    reportGates[releasedReports]!.resolve();
+    await flushAsync();
+
+    expect(usage.filter(event => event.leaseId === "lease-1")
+      .reduce((sum, event) => sum + event.inputAudioSeconds, 0)).toBeCloseTo(9.3);
+    expect(usage.filter(event => event.leaseId === "lease-2")
+      .reduce((sum, event) => sum + event.inputAudioSeconds, 0)).toBeCloseTo(1);
+    expect(maximumActiveUsage).toBe(1);
+    expect(clock.now()).toBeLessThan(15_000);
+    await relay.dispose();
+  });
+
+  it("fails closed when an old-lease usage result becomes indeterminate after renewal", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const usageGate = deferred<void>();
+    const renewGate = deferred<BudgetLease>();
+    testAuthority.reportUsage = () => usageGate.promise;
+    testAuthority.renewLease = () => renewGate.promise;
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    for (let index = 0; index < 10; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: clock.now(),
+      }));
+    }
+    clock.time = 10_000;
+    await relay.tick();
+    renewGate.resolve({ leaseId: "lease-2", expiresAtMs: 25_000, maxInputAudioMs: 15_000 });
+    await flushAsync();
+    expect(factory.sessions[0]!.closed).toBe(false);
+
+    usageGate.reject(new Error("old lease usage outcome unknown"));
+    await flushAsync();
+    expect(factory.sessions[0]!.closed).toBe(true);
+    expect(host.peer.events.filter(event => event.type === "route").at(-1)).toMatchObject({
+      canCapture: false,
+      reason: "blocked",
+    });
+    await relay.dispose();
+  });
+
+  it("drops provider audio and captions at the lease expiry boundary before tick", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const relay = new RelayOrchestrator(verifier, authority(), factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const guest = connected.get("guest-en")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: clock.now(),
+    }));
+    const guestAudioBefore = guest.peer.events.filter(event => event.type === "audio").length;
+    const guestCaptionsBefore = guest.peer.events.filter(event => event.type === "caption.delta").length;
+    const hostCaptionsBefore = host.peer.events.filter(event => event.type === "caption.delta").length;
+
+    clock.time = 15_000;
+    factory.sessions[0]!.sink.onOutputAudio(audio);
+    factory.sessions[0]!.sink.onOutputTranscript("expired translation");
+    factory.sessions[0]!.sink.onInputTranscript("expired source");
+    await flushAsync();
+
+    expect(guest.peer.events.filter(event => event.type === "audio")).toHaveLength(guestAudioBefore);
+    expect(guest.peer.events.filter(event => event.type === "caption.delta")).toHaveLength(guestCaptionsBefore);
+    expect(host.peer.events.filter(event => event.type === "caption.delta")).toHaveLength(hostCaptionsBefore);
+    expect(factory.sessions[0]!.closed).toBe(false);
+    await relay.dispose();
+  });
+
+  it("fences late usage and renew completions from a resumed source", async () => {
+    const clock = new Clock();
+    const factory = new Factory();
+    const testAuthority = authority();
+    const usageGate = deferred<void>();
+    const renewGate = deferred<BudgetLease>();
+    let leaseNumber = 0;
+    testAuthority.acquireLease = async () => ({
+      leaseId: `source-lease-${++leaseNumber}`,
+      expiresAtMs: 15_000,
+      maxInputAudioMs: 15_000,
+    });
+    testAuthority.reportUsage = async () => usageGate.promise;
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+
+    for (let index = 0; index < 10; index += 1) {
+      clock.time += 100;
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+        v: 1, type: "audio.append", audio, atMs: 0,
+      }));
+    }
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.pause" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.resume" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "audio.append", audio, atMs: 0 }));
+    expect(factory.sessions).toHaveLength(2);
+    usageGate.reject(new Error("old usage failed"));
+    await flushAsync();
+    expect(factory.sessions[1]!.closed).toBe(false);
+
+    testAuthority.reportUsage = async () => {};
+    testAuthority.renewLease = () => renewGate.promise;
+    clock.time = 11_000;
+    await relay.tick();
+    await flushAsync();
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.pause" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "capture.resume" }));
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "audio.append", audio, atMs: 0 }));
+    const currentSession = factory.sessions.at(-1)!;
+    renewGate.resolve({ leaseId: "stale-renew", expiresAtMs: 25_000, maxInputAudioMs: 15_000 });
+    await flushAsync();
+    expect(currentSession.closed).toBe(false);
+    await relay.dispose();
+  });
+
+  it("does not let a late presence result override newer host controls", async () => {
+    const clock = new Clock();
+    const testAuthority = authority();
+    const factory = new Factory();
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connected = await readyAndStart(relay);
+    const host = connected.get("host-ja")!;
+    const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: 0,
+    }));
+    const presenceGate = deferred<Awaited<ReturnType<Authority["syncPresence"]>>>();
+    testAuthority.syncPresence = () => presenceGate.promise;
+    clock.time = 6_000;
+    await relay.tick();
+    for (const type of ["room.pause", "room.resume"]) {
+      await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type }));
+    }
+    clock.time = 6_100;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1, type: "audio.append", audio, atMs: 0,
+    }));
+    const currentSession = factory.sessions.at(-1)!;
+    expect(currentSession.closed).toBe(false);
+    presenceGate.resolve({
+      roomEpoch: "e",
+      state: "paused",
+      allowedAdmissionIds: [...testAuthority.grants.values()],
+    });
+    await flushAsync();
+    expect(currentSession.closed).toBe(false);
+    expect(host.peer.events.filter(event => event.type === "room.state").at(-1)).toMatchObject({ paused: false });
+    await relay.dispose();
+  });
+
+  it("does not apply a late presence result to a replacement admission", async () => {
+    const clock = new Clock();
+    const testAuthority = authority();
+    const originalSync = testAuthority.syncPresence.bind(testAuthority);
+    const presenceGate = deferred<Awaited<ReturnType<Authority["syncPresence"]>>>();
+    let presenceCalls = 0;
+    testAuthority.syncPresence = input => {
+      presenceCalls += 1;
+      return presenceCalls === 5 ? presenceGate.promise : originalSync(input);
+    };
+    const relay = new RelayOrchestrator(verifier, testAuthority, new Factory(), clock);
+    const connected = await readyAndStart(relay);
+    clock.time = 6_000;
+    await relay.tick();
+    expect(presenceCalls).toBe(5);
+    const replacementPeer = new Peer();
+    const replacing = relay.connect("Bearer host-ja#late-presence", replacementPeer);
+    await flushAsync();
+    presenceGate.resolve({
+      roomEpoch: "e",
+      state: "paused",
+      allowedAdmissionIds: [testAuthority.grants.get("guest-en")!],
+    });
+    const replacement = await replacing;
+    expect(replacement).toBeDefined();
+    await flushAsync();
+    expect(replacementPeer.closed).toBeUndefined();
+    expect(replacement!.generation).toBeGreaterThan(connected.get("host-ja")!.generation);
     await relay.dispose();
   });
 
@@ -443,12 +1041,14 @@ describe("relay orchestration", () => {
     clock.time = 31_000;
     await relay.receive("r", "e", "guest-en", guest.generation, JSON.stringify({ v: 1, type: "client.ping" }));
     await relay.tick();
+    await flushAsync();
     expect(factory.sessions[0]!.closed).toBe(true);
     expect(guest.peer.events.filter(event => event.type === "room.state").at(-1)).toMatchObject({ paused: true });
 
     clock.time = 121_000;
     await relay.receive("r", "e", "guest-en", guest.generation, JSON.stringify({ v: 1, type: "client.ping" }));
     await relay.tick();
+    await flushAsync();
     expect(guest.peer.closed).toEqual([1000, "room-ended"]);
     await relay.dispose();
   });
@@ -517,6 +1117,7 @@ describe("relay orchestration", () => {
     };
     clock.time = 11_000;
     await relay.tick();
+    await flushAsync();
     expect(hostPeer.closed).toEqual([4008, "client-ping-timeout"]);
     expect(host).toBeDefined();
     await relay.dispose();

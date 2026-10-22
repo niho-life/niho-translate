@@ -99,6 +99,61 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(queue.enqueue(Data([5, 6, 7, 8, 9])))
     }
 
+    func testPlaybackSchedulerPrerollsBeforeAnyCompletion() {
+        var scheduler = PlaybackScheduler(maximumBytes: 20, maximumScheduledBytes: 8)
+        let first = scheduler.enqueue(Data(repeating: 1, count: 4), generation: 0)
+        let second = scheduler.enqueue(Data(repeating: 2, count: 4), generation: 0)
+        let queued = scheduler.enqueue(Data(repeating: 3, count: 4), generation: 0)
+
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(second.count, 1)
+        XCTAssertTrue(queued.isEmpty)
+        XCTAssertEqual(scheduler.scheduledCount, 2)
+        XCTAssertEqual(scheduler.queuedCount, 1)
+
+        let replenished = scheduler.consumed(token: first[0].token, generation: 0)
+        XCTAssertEqual(replenished.map(\.data), [Data(repeating: 3, count: 4)])
+        XCTAssertEqual(scheduler.scheduledCount, 2)
+    }
+
+    func testPlaybackSchedulerBoundsMemoryAndDropsOnlyQueuedAudio() {
+        var scheduler = PlaybackScheduler(maximumBytes: 12, maximumScheduledBytes: 4)
+        let scheduled = scheduler.enqueue(Data(repeating: 1, count: 4), generation: 0)
+        XCTAssertEqual(scheduled.count, 1)
+        XCTAssertTrue(scheduler.enqueue(Data(repeating: 2, count: 4), generation: 0).isEmpty)
+        XCTAssertTrue(scheduler.enqueue(Data(repeating: 3, count: 4), generation: 0).isEmpty)
+        XCTAssertTrue(scheduler.enqueue(Data(repeating: 4, count: 4), generation: 0).isEmpty)
+        XCTAssertEqual(scheduler.byteCount, 12)
+        XCTAssertEqual(scheduler.queuedCount, 2)
+
+        let next = scheduler.consumed(token: scheduled[0].token, generation: 0)
+        XCTAssertEqual(next.map(\.data), [Data(repeating: 3, count: 4)])
+        XCTAssertLessThanOrEqual(scheduler.byteCount, scheduler.maximumBytes)
+    }
+
+    func testPlaybackSchedulerRejectsChunkLargerThanScheduledLimit() {
+        var scheduler = PlaybackScheduler(maximumBytes: 16, maximumScheduledBytes: 8)
+
+        XCTAssertTrue(scheduler.enqueue(Data(repeating: 1, count: 9), generation: 0).isEmpty)
+        XCTAssertEqual(scheduler.scheduledBytes, 0)
+        XCTAssertEqual(scheduler.queuedBytes, 0)
+        XCTAssertEqual(scheduler.byteCount, 0)
+    }
+
+    func testPlaybackSchedulerRejectsStaleCompletionAfterResetAndPause() {
+        var scheduler = PlaybackScheduler(maximumBytes: 16, maximumScheduledBytes: 8)
+        let old = scheduler.enqueue(Data(repeating: 1, count: 4), generation: 0)
+        scheduler.reset(generation: 1, paused: false)
+        let current = scheduler.enqueue(Data(repeating: 2, count: 4), generation: 1)
+        XCTAssertTrue(scheduler.consumed(token: old[0].token, generation: 0).isEmpty)
+        XCTAssertEqual(scheduler.scheduledBytes, 4)
+
+        XCTAssertTrue(scheduler.setPaused(true, generation: 1).isEmpty)
+        XCTAssertEqual(scheduler.byteCount, 0)
+        XCTAssertTrue(scheduler.consumed(token: current[0].token, generation: 1).isEmpty)
+        XCTAssertTrue(scheduler.enqueue(Data(repeating: 3, count: 4), generation: 1).isEmpty)
+    }
+
     func testRoutePolicyNeverAutoSpeakerOrResume() {
         var policy = RoutePolicy()
         XCTAssertTrue(policy.update(.none))

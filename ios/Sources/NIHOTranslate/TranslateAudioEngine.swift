@@ -28,10 +28,7 @@ public final class TranslateAudioEngine: @unchecked Sendable {
     )!
     private var captureConverter: AVAudioConverter?
     private var captureBytes = Data()
-    private var playbackChunks: [Data] = []
-    private var playbackQueuedBytes = 0
-    private var playbackInFlightBytes = 0
-    private let maximumPlaybackBytes = 96_000
+    private var playbackScheduler = PlaybackScheduler()
     private var sessionGeneration = 0
     private var playbackGeneration = 0
     private var running = false
@@ -143,18 +140,8 @@ public final class TranslateAudioEngine: @unchecked Sendable {
             else {
                 return
             }
-            while
-                self.playbackInFlightBytes + self.playbackQueuedBytes + data.count > self.maximumPlaybackBytes,
-                !self.playbackChunks.isEmpty
-            {
-                self.playbackQueuedBytes -= self.playbackChunks.removeFirst().count
-            }
-            guard self.playbackInFlightBytes + self.playbackQueuedBytes + data.count <= self.maximumPlaybackBytes else {
-                return
-            }
-            self.playbackChunks.append(data)
-            self.playbackQueuedBytes += data.count
-            self.drainPlayback(generation: playbackGeneration)
+            let reservations = self.playbackScheduler.enqueue(data, generation: playbackGeneration)
+            self.schedulePlayback(reservations)
         }
     }
 
@@ -163,9 +150,7 @@ public final class TranslateAudioEngine: @unchecked Sendable {
         pipeline.sync {
             playbackGeneration += 1
             player.stop()
-            playbackChunks.removeAll(keepingCapacity: false)
-            playbackQueuedBytes = 0
-            playbackInFlightBytes = 0
+            playbackScheduler.reset(generation: playbackGeneration, paused: listeningPaused)
             if running && !listeningPaused { player.play() }
             return playbackGeneration
         }
@@ -178,10 +163,9 @@ public final class TranslateAudioEngine: @unchecked Sendable {
             if paused {
                 playbackGeneration += 1
                 player.stop()
-                playbackChunks.removeAll(keepingCapacity: false)
-                playbackQueuedBytes = 0
-                playbackInFlightBytes = 0
+                playbackScheduler.reset(generation: playbackGeneration, paused: true)
             } else if running {
+                _ = playbackScheduler.setPaused(false, generation: playbackGeneration)
                 player.play()
             }
             return playbackGeneration
@@ -239,10 +223,8 @@ public final class TranslateAudioEngine: @unchecked Sendable {
         engine.stop()
         captureConverter = nil
         captureBytes.removeAll(keepingCapacity: false)
-        playbackChunks.removeAll(keepingCapacity: false)
-        playbackQueuedBytes = 0
-        playbackInFlightBytes = 0
         playbackGeneration += 1
+        playbackScheduler.reset(generation: playbackGeneration, paused: listeningPaused)
         running = false
         captureActive = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -322,38 +304,36 @@ public final class TranslateAudioEngine: @unchecked Sendable {
         }
     }
 
-    private func drainPlayback(generation: Int) {
-        guard
-            generation == playbackGeneration,
-            playbackInFlightBytes == 0,
-            !listeningPaused,
-            player.isPlaying,
-            !playbackChunks.isEmpty
-        else {
-            return
-        }
-        let data = playbackChunks.removeFirst()
-        playbackQueuedBytes -= data.count
-        let frames = AVAudioFrameCount(data.count / 2)
-        guard
-            let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: frames),
-            let destination = buffer.floatChannelData?[0]
-        else {
-            return
-        }
-        buffer.frameLength = frames
-        data.withUnsafeBytes { raw in
-            let source = raw.bindMemory(to: Int16.self)
-            for index in 0..<source.count {
-                destination[index] = Float(source[index]) / Float(Int16.max)
+    private func schedulePlayback(_ reservations: [PlaybackReservation]) {
+        for reservation in reservations {
+            let frames = AVAudioFrameCount(reservation.data.count / 2)
+            guard
+                let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: frames),
+                let destination = buffer.floatChannelData?[0]
+            else {
+                let next = playbackScheduler.schedulingFailed(
+                    token: reservation.token,
+                    generation: reservation.generation
+                )
+                schedulePlayback(next)
+                continue
             }
-        }
-        playbackInFlightBytes = data.count
-        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            self?.pipeline.async {
-                guard let self, generation == self.playbackGeneration else { return }
-                self.playbackInFlightBytes = 0
-                self.drainPlayback(generation: generation)
+            buffer.frameLength = frames
+            reservation.data.withUnsafeBytes { raw in
+                let source = raw.bindMemory(to: Int16.self)
+                for index in 0..<source.count {
+                    destination[index] = Float(source[index]) / Float(Int16.max)
+                }
+            }
+            player.scheduleBuffer(buffer, completionCallbackType: .dataConsumed) { [weak self] _ in
+                self?.pipeline.async {
+                    guard let self else { return }
+                    let next = self.playbackScheduler.consumed(
+                        token: reservation.token,
+                        generation: reservation.generation
+                    )
+                    self.schedulePlayback(next)
+                }
             }
         }
     }

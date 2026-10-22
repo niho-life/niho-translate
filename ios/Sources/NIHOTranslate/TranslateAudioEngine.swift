@@ -211,7 +211,7 @@ public final class TranslateAudioEngine: @unchecked Sendable {
         stopLocked(generation: sessionGeneration, force: true)
         sessionGeneration = generation
         do {
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
             try session.setActive(true)
             guard privateRoute(session.currentRoute) != .none else {
                 throw TranslateProtocolError.invalidField

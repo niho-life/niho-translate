@@ -17,6 +17,15 @@ public struct TranslateView: View {
         self.onExit = onExit
     }
 
+    /// A host may obtain a fresh scoped ticket after its consent/permission flow.
+    public init(session: TranslateSession, onExit: (() -> Void)? = nil) {
+        _session = StateObject(wrappedValue: session)
+        _consent = State(initialValue: session.explicitConsent)
+        _attemptedConnection = State(initialValue:
+            session.connectionStatus == .connecting || session.connectionStatus == .connected)
+        self.onExit = onExit
+    }
+
     private var english: Bool { session.config.sourceLanguage == .en }
     private func text(_ ja: String, _ en: String) -> String { english ? en : ja }
     private var connected: Bool { session.connectionStatus == .connected }

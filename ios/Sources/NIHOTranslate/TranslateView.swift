@@ -22,13 +22,19 @@ public struct TranslateView: View {
         _session = StateObject(wrappedValue: session)
         _consent = State(initialValue: session.explicitConsent)
         _attemptedConnection = State(initialValue:
-            session.connectionStatus == .connecting || session.connectionStatus == .connected)
+            session.connectionStatus == .connecting
+                || session.connectionStatus == .connected
+                || session.connectionStatus == .failed)
         self.onExit = onExit
     }
 
     private var english: Bool { session.config.sourceLanguage == .en }
     private func text(_ ja: String, _ en: String) -> String { english ? en : ja }
     private var connected: Bool { session.connectionStatus == .connected }
+    private var needsRejoin: Bool {
+        !session.roomEnded && (session.connectionStatus == .failed
+            || (attemptedConnection && session.connectionStatus == .disconnected))
+    }
     private var otherConnected: Bool {
         session.participants.contains { $0.participantId != session.config.participantId }
     }
@@ -55,7 +61,7 @@ public struct TranslateView: View {
                         person(text("相手", "Other person"), language: session.config.targetLanguage)
                     }.padding().background(Color(.secondarySystemGroupedBackground)).cornerRadius(20)
 
-                    if !attemptedConnection {
+                    if !attemptedConnection && !needsRejoin {
                         VStack(alignment: .leading, spacing: 16) {
                             Text(text("それぞれの言葉で、同じ会話を。", "One conversation, in your own language."))
                                 .font(.title2.bold())
@@ -74,11 +80,25 @@ public struct TranslateView: View {
                             }
                         }
                     } else {
-                        if session.config.role == .host && !session.roomActive && !session.roomPaused && !session.roomEnded {
+                        if needsRejoin {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label(
+                                    text("接続が切れました", "Connection lost"),
+                                    systemImage: "wifi.exclamationmark"
+                                ).font(.headline)
+                                Text(text(
+                                    "通信を再開するには、ルームへ戻って入り直してください。",
+                                    "Return to the room and join again to resume interpretation."
+                                )).font(.subheadline).foregroundColor(.secondary)
+                                Button(text("ルームへ戻る", "Return to room")) { finish() }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        if session.config.role == .host && connected && !session.roomActive && !session.roomPaused && !session.roomEnded {
                             Button(text("通訳を始める", "Start interpretation")) { session.startRoom() }
                                 .buttonStyle(.borderedProminent).disabled(!readyToStart)
                         }
-                        if !session.roomActive || !otherConnected {
+                        if connected && (!session.roomActive || !otherConnected) {
                             Text(session.roomPaused
                                 ? text("通訳を一時停止しています。", "Interpretation is paused.")
                                 : text("相手の接続と、作成者の開始を待っています。", "Waiting for the other person and the host to start."))
@@ -108,7 +128,7 @@ public struct TranslateView: View {
                         if session.config.role == .host && (session.roomActive || session.roomPaused) {
                             Button(session.roomPaused ? text("通訳を再開", "Resume interpretation") : text("通訳を一時停止", "Pause interpretation")) {
                                 if session.roomPaused { session.resumeRoom() } else { session.pauseRoom() }
-                            }.buttonStyle(.bordered)
+                            }.buttonStyle(.bordered).disabled(!connected)
                         }
                     }
                     if let code = session.errorCode {
@@ -135,7 +155,9 @@ public struct TranslateView: View {
         .navigationViewStyle(.stack)
         .tint(accent)
         .onChange(of: session.connectionStatus) { value in
-            if value == .connecting || value == .connected { attemptedConnection = true }
+            if value == .connecting || value == .connected || value == .failed {
+                attemptedConnection = true
+            }
         }
         .onChange(of: session.roomEnded) { if $0 { finish() } }
         .onDisappear { session.leave() }
@@ -154,7 +176,8 @@ public struct TranslateView: View {
         if session.roomPaused { return text("一時停止中", "Paused") }
         if connected && !otherConnected { return text("相手の接続待ち", "Waiting for the other person") }
         switch session.connectionStatus {
-        case .disconnected: return text("接続前", "Not connected")
+        case .disconnected:
+            return needsRejoin ? text("接続が切れました", "Connection lost") : text("接続前", "Not connected")
         case .connecting: return text("接続しています", "Connecting")
         case .connected: return text("接続済み", "Connected")
         case .failed: return text("接続が切れました", "Connection lost")
@@ -167,6 +190,8 @@ public struct TranslateView: View {
             return text("マイク付きイヤフォンを接続し、マイクと聞く音声を再開してください。", "Connect earphones with a microphone, then resume the microphone and listening.")
         case "LEASE_DENIED", "LEASE_EXPIRED":
             return text("利用できる通訳の枠がないため、送信を停止しました。", "Audio sending stopped because interpretation is unavailable.")
+        case "CONNECTION_LOST":
+            return text("接続が切れました。ルームへ戻り、新しく入り直してください。", "Connection was lost. Return to the room and join again.")
         default:
             return text("通訳を続けられませんでした。一度退出し、ルームに入り直してください。", "Interpretation could not continue. Leave and rejoin the room.")
         }

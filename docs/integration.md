@@ -13,6 +13,10 @@
 
 `capture.pause/resume` は本人のマイクだけを制御し、受信audioを止めません。`room.start/pause/resume/end` はhost専用です。source/target変更は途中操作ではなく、新しいadmission/roomで行います。
 
+接続試行、Native pong期限、send/receive、queue上限の失敗後に、SDKは同じ`TranslateSession`とticketで自動再接続しません。ホストアプリへ戻る導線を使い、Authorityからfresh scoped ticketを取得して、新しい`TranslateSession`を生成してください。SDKへNIHOログイン情報やrefresh grantを渡してはいけません。接続後のNative ping/pong watchdogはtransportの生存確認であり、無音中も有効ですが、翻訳処理の成功確認ではありません。
+
+`leave()`、接続喪失、接続後の`setExplicitConsent(false)`はそのSessionの終端です。送受信・再生・収録を止め、字幕を破棄し、同じinstanceへ同意を入れ直しても再接続しません。接続前の同意選択とOS許可の確認は、ticketを実際に試行するまでは行えます。
+
 ## Ticket
 
 relayはissuer、audience、`exp/nbf/jti/roomId/participantId/roomEpoch`、config固定の `EdDSA` または `RS256` allowlistを検証します。ticketの残存時間は検証時点から最大60秒です。process内jti cacheに加え、private Authorityの `admit` がjti consumeとcurrent admission grant更新をdurableかつ原子的に行い、relay restartをまたぐreplayを拒否してください。relay内generationはrestartで1へ戻り得るため、単独では認可根拠にしません。
@@ -50,4 +54,4 @@ lease拒否・失効・usage失敗後はsourceをblockedにし、audio packetご
 
 ## iOS host app
 
-`NSMicrophoneUsageDescription`、Audio background mode、認証・invite UIはhost appが定義します。Bluetooth HFPまたは有線headsetはplayback準備時にinputとoutputの両方を検証します。マイクmuteはcaptureだけを止め、翻訳再生を止めません。切断やroute喪失時はcapture/playbackを止めてaudio sessionをdeactivateし、speakerへ自動切替せず、route復帰後も利用者の明示操作までresumeしません。
+`NSMicrophoneUsageDescription`、Audio background mode、認証・invite UIはhost appが定義します。Bluetooth HFPまたは有線headsetはplayback準備時にinputとoutputの両方を検証します。マイクmuteはcaptureだけを止め、翻訳再生を止めません。切断やroute喪失・interruption時はcapture/playbackを止めてaudio sessionをdeactivateし、speakerへ自動切替せず、route復帰後も利用者の明示操作までresumeしません。明示resume時にもprivate input/outputを再検証し、失敗時はmute/listening pauseを維持します。

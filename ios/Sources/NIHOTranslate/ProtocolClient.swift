@@ -43,9 +43,12 @@ public final class TranslateProtocolClient: @unchecked Sendable {
     private var taskToken: UUID?
     private var callbackGate = ConnectionCallbackGate()
     private var deliveryGate = DeliverySequenceGate()
+    private var nativePingGate = NativePingWatchdogGate()
     private var opened = false
     private var outgoing = BoundedOutgoingQueue()
-    private var pingTimer: DispatchSourceTimer?
+    private var connectTimer: DispatchSourceTimer?
+    private var heartbeatTimer: DispatchSourceTimer?
+    private var pongTimer: DispatchSourceTimer?
 
     public var onEvent: (@Sendable (ServerEnvelope) -> Void)?
     public var onState: (@Sendable (State) -> Void)?
@@ -71,7 +74,9 @@ public final class TranslateProtocolClient: @unchecked Sendable {
     }
 
     deinit {
-        pingTimer?.cancel()
+        connectTimer?.cancel()
+        heartbeatTimer?.cancel()
+        pongTimer?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
         session.invalidateAndCancel()
     }
@@ -94,6 +99,7 @@ public final class TranslateProtocolClient: @unchecked Sendable {
             taskToken = UUID()
             callbackGate.replace(connectionToken: connectionToken, taskToken: taskToken)
             deliveryGate.reset()
+            nativePingGate.reset(connectionToken: connectionToken)
             opened = false
             outgoing.removeAll()
             var request = URLRequest(url: url)
@@ -103,6 +109,7 @@ public final class TranslateProtocolClient: @unchecked Sendable {
             next.maximumMessageSize = maxJSONBytes
             task = next
             emitState(.connecting, token: connectionToken, taskToken: taskToken)
+            startConnectDeadline(token: connectionToken, taskToken: taskToken!)
             next.resume()
             receive(from: next, token: connectionToken, taskToken: taskToken!)
         }
@@ -119,6 +126,7 @@ public final class TranslateProtocolClient: @unchecked Sendable {
                 }
                 guard self.outgoing.enqueue(data) else {
                     continuation.resume(throwing: TranslateProtocolError.tooLarge)
+                    self.failCurrent(token: self.connectionToken, taskToken: taskToken)
                     return
                 }
                 continuation.resume(returning: ())
@@ -134,17 +142,19 @@ public final class TranslateProtocolClient: @unchecked Sendable {
     }
 
     private func opened(task expected: URLSessionWebSocketTask) {
-        guard task === expected else { return }
+        guard task === expected, !opened else { return }
         guard let taskToken else { return }
         opened = true
-        startPing(token: connectionToken)
+        connectTimer?.cancel()
+        connectTimer = nil
+        startHeartbeat(token: connectionToken, taskToken: taskToken)
         emitState(.connected, token: connectionToken, taskToken: taskToken)
         drainOutgoing(token: connectionToken, taskToken: taskToken)
     }
 
     private func closed(task expected: URLSessionWebSocketTask) {
-        guard task === expected else { return }
-        cancelCurrent(state: .disconnected)
+        guard task === expected, let taskToken else { return }
+        failCurrent(token: connectionToken, taskToken: taskToken)
     }
 
     private func receive(from expected: URLSessionWebSocketTask, token: UUID, taskToken expectedTaskToken: UUID) {
@@ -180,19 +190,15 @@ public final class TranslateProtocolClient: @unchecked Sendable {
                     }
                     if event.type == "room.state", !self.opened {
                         self.opened = true
-                        self.startPing(token: token)
+                        self.connectTimer?.cancel()
+                        self.connectTimer = nil
+                        self.startHeartbeat(token: token, taskToken: expectedTaskToken)
                         self.emitState(.connected, token: token, taskToken: expectedTaskToken)
                     }
                     self.emitEvent(event, token: token, taskToken: expectedTaskToken)
                     self.receive(from: expected, token: token, taskToken: expectedTaskToken)
                 } catch {
-                    expected.cancel(with: .invalid, reason: nil)
-                    self.task = nil
-                    self.taskToken = nil
-                    self.callbackGate.replace(connectionToken: token, taskToken: nil)
-                    self.opened = false
-                    self.outgoing.removeAll()
-                    self.emitState(.failed, token: token, taskToken: nil)
+                    self.failCurrent(token: token, taskToken: expectedTaskToken)
                 }
             }
         }
@@ -230,13 +236,7 @@ public final class TranslateProtocolClient: @unchecked Sendable {
                         self.connectionToken == token,
                         self.taskToken == expectedTaskToken
                     else { return }
-                    expected.cancel(with: .invalid, reason: nil)
-                    self.task = nil
-                    self.taskToken = nil
-                    self.callbackGate.replace(connectionToken: token, taskToken: nil)
-                    self.opened = false
-                    self.outgoing.removeAll()
-                    self.emitState(.failed, token: token, taskToken: nil)
+                    self.failCurrent(token: token, taskToken: expectedTaskToken)
                 }
             }
         }
@@ -247,17 +247,52 @@ public final class TranslateProtocolClient: @unchecked Sendable {
         taskToken = nil
         callbackGate.replace(connectionToken: connectionToken, taskToken: nil)
         deliveryGate.reset()
+        nativePingGate.cancel()
         opened = false
-        pingTimer?.cancel()
-        pingTimer = nil
+        cancelTimers()
         outgoing.removeAll()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
         emitState(state, token: connectionToken, taskToken: nil)
     }
 
-    private func startPing(token: UUID) {
-        pingTimer?.cancel()
+    private func failCurrent(token: UUID, taskToken expectedTaskToken: UUID) {
+        guard connectionToken == token, taskToken == expectedTaskToken else { return }
+        cancelTimers()
+        nativePingGate.cancel()
+        deliveryGate.reset()
+        opened = false
+        outgoing.removeAll()
+        task?.cancel(with: .invalid, reason: nil)
+        task = nil
+        taskToken = nil
+        callbackGate.replace(connectionToken: token, taskToken: nil)
+        emitState(.failed, token: token, taskToken: nil)
+    }
+
+    private func cancelTimers() {
+        connectTimer?.cancel()
+        connectTimer = nil
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+        pongTimer?.cancel()
+        pongTimer = nil
+    }
+
+    private func startConnectDeadline(token: UUID, taskToken expectedTaskToken: UUID) {
+        connectTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: wireQueue)
+        timer.schedule(deadline: .now() + .seconds(15))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.opened else { return }
+            self.failCurrent(token: token, taskToken: expectedTaskToken)
+        }
+        connectTimer = timer
+        timer.resume()
+    }
+
+    private func startHeartbeat(token: UUID, taskToken expectedTaskToken: UUID) {
+        heartbeatTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: wireQueue)
         timer.schedule(deadline: .now() + .seconds(5), repeating: .seconds(5))
         timer.setEventHandler { [weak self] in
@@ -265,15 +300,68 @@ public final class TranslateProtocolClient: @unchecked Sendable {
                 let self,
                 self.opened,
                 self.connectionToken == token,
-                let taskToken = self.taskToken,
-                let data = try? JSONEncoder().encode(ClientEnvelope.ping),
-                self.outgoing.enqueue(data)
+                self.taskToken == expectedTaskToken,
+                let expected = self.task,
+                let data = try? JSONEncoder().encode(ClientEnvelope.ping)
             else {
                 return
             }
-            self.drainOutgoing(token: token, taskToken: taskToken)
+            guard self.outgoing.enqueue(data) else {
+                self.failCurrent(token: token, taskToken: expectedTaskToken)
+                return
+            }
+            self.drainOutgoing(token: token, taskToken: expectedTaskToken)
+            guard let pingToken = self.nativePingGate.beginPing(connectionToken: token) else {
+                return
+            }
+            self.startPongDeadline(
+                token: token,
+                taskToken: expectedTaskToken,
+                pingToken: pingToken
+            )
+            expected.sendPing { [weak self, weak expected] error in
+                guard let expected else { return }
+                self?.wireQueue.async { [weak self] in
+                    guard
+                        let self,
+                        self.task === expected,
+                        self.connectionToken == token,
+                        self.taskToken == expectedTaskToken
+                    else { return }
+                    guard error == nil else {
+                        self.failCurrent(token: token, taskToken: expectedTaskToken)
+                        return
+                    }
+                    guard self.nativePingGate.receivePong(
+                        connectionToken: token,
+                        pingToken: pingToken
+                    ) else {
+                        return
+                    }
+                    self.pongTimer?.cancel()
+                    self.pongTimer = nil
+                }
+            }
         }
-        pingTimer = timer
+        heartbeatTimer = timer
+        timer.resume()
+    }
+
+    private func startPongDeadline(token: UUID, taskToken expectedTaskToken: UUID, pingToken: UUID) {
+        pongTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: wireQueue)
+        timer.schedule(deadline: .now() + .seconds(10))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard self.nativePingGate.expire(
+                connectionToken: token,
+                pingToken: pingToken
+            ) else {
+                return
+            }
+            self.failCurrent(token: token, taskToken: expectedTaskToken)
+        }
+        pongTimer = timer
         timer.resume()
     }
 

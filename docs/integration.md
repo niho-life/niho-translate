@@ -32,7 +32,9 @@ Authorityは自分のserver clockで `hostLastSeen` と `lastAnySeen` をdurable
 
 lease expiryは取得時刻より後かつ最大15秒、`maxInputAudioMs` は20〜15,000 msです。relayは入力audio量、最大200 ms burst、wall-clock rateを強制します。renew中に旧lease expiryを越えた場合はrenew responseを採用しません。usageはleaseごとにaggregateされ、renew前後で別leaseへ混ぜません。
 
-lease拒否・失効・usage失敗後はsourceをblockedにし、audio packetごとの自動acquireを行いません。利用者の明示 `capture.resume` 後にのみfresh Authority acquireを試します。
+usage報告とrenewはそれぞれsingle-flightで並行します。Authorityはrenewで新しいleaseを返した後も、旧leaseが有効な間に受け付けた入力分のusageを旧IDで集計できる必要があります。renewだけを理由に旧IDの報告を拒否せず、各IDの予約済み`maxInputAudioMs`を独立して検証してください。
+
+lease拒否・失効・usage失敗後はsourceをblockedにし、audio packetごとの自動acquireを行いません。利用者の明示 `capture.resume` 後にのみfresh Authority acquireを試します。usageは加算APIのため、応答喪失時はAuthorityで既に計上されたかを判定できません。結果不明のsnapshotは再送せず、そのlease IDを隔離します。同一接続でそのIDを再取得しても再開せず、新しいlease IDのgrantを要求します。これはexact-once配送の保証ではなく、二重計上を避ける安全停止です。
 
 ## Relay real mode
 

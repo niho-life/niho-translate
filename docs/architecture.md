@@ -6,11 +6,27 @@ v1はマイク付きイヤフォン用のnear-field noise reductionを指定し�
 
 `packages/provider-openai` はinjected WebSocket factory/clockを使います。接続中の最初の音声は5秒分（240,000 bytes）までqueueし、`session.created` 後の初期設定に対する `session.updated` を待ってから順番にflushします。5秒のconnect/config timeoutはこのACKまで有効です。transport bufferを観測できる場合は192,000 bytesでfail closedし、観測できない場合は同時に1件だけ空の部分 `session.update` を5秒間隔で送るcontrol ACK watchdogを使います。既知media eventとoptional PCM metadataを厳格に検証し、`rate_limits.updated` とboundedな未知non-media controlだけを無視します。出力は `session.output_audio.delta.delta` を読み、4,800-byte chunkへまとめ、close時のeven-byte末尾も短いPCMとして通知します。watchdogはtransport livenessだけを示し、翻訳成功は示しません。
 
-`packages/room-core` は外部I/Oを持たないroom state machineです。v1はhost 1席 + guest 1席で、切断後2分の席予約、generation、明示host control、最大90分、字幕2分を管理します。`client.ready` は開始ではなく、相手言語のready listenerがいなければcaptureできません。v1は出力言語ごとに話者が1人のため、音声の配信条件は有効なcapture・相手listener・現行providerです。端末energy/focusは推定時刻だけに使い、小声や10秒を超えた有効な翻訳音声を捨てません。room-coreのfocus policyはv2の検討基盤として保持しています。10秒は実機で測る受入目標です。
+`packages/room-core` は外部I/Oを持たないroom state machineです。v1はhost 1席 + guest 1席で、切断後2分の席予約、generation、明示host control、最大90分、字幕2分を管理します。`client.ready` は開始ではなく、相手言語のready listenerがいなければcaptureできません。v1は出力言語ごとに話者が1人のため、音声の配信条件は有効なcapture・相手listener・現行providerです。端末energy/focusは推定時刻だけに使い、小声や10秒を超えた有効な翻訳音声を捨てません。room-coreのfocus policyはv2の検討基盤として保持しています。
 
-`packages/relay-core` は同じ `roomId + roomEpoch` のconnect/receive/close/tick/provider callbackを直列化し、検証済みclient操作の待ちを接続ごとに32件へ制限します。全server eventは接続単位の `deliveryId` を持ち、未ACKを実wire bytes 512 KiB/128 event以内に保ちます。5秒ごとのpresence同期とclient ping（15秒timeout）をserver clockで判定し、Authority失敗時は全sourceをfail closedにして、明示 `capture.resume` とfresh sync成功まで再開しません。provider tokenをclose前に無効化し、旧admission・旧generation・旧providerのlate callbackを破棄します。leaseは最大15秒に加えて `maxInputAudioMs`、200 ms token-bucket burst、wall-clock pacingを強制します。
+`packages/relay-core` は同じ `roomId + roomEpoch` の状態変更をsingle-writerで直列化し、検証済みclient操作の待ちを接続ごとに32件へ制限します。全server eventは接続単位の `deliveryId` を持ち、未ACKを実wire bytes 512 KiB/128 event以内に保ちます。Authorityへの定常的なusage報告、5秒ごとのpresence同期、lease renewはserial境界の外でsingle-flight実行し、結果だけを同じ境界へ戻します。commit時にroom、admission、generation、provider token、leaseと期限を再照合するため、停止・再接続・revocation・破棄後の遅い応答は新sourceを停止・再開しません。
+
+usageはleaseごとにpendingとin-flight snapshotを分離します。報告中の新規音声はpendingへ継続加算され、成功応答を得たsnapshotだけを確定します。usage reportとrenewはそれぞれsingle-flightで並行でき、stop時はその時点まで、別IDへのrenew時は旧leaseへ到着した分までを、閾値未満でもlease ID別にfinal drainします。このためAuthorityは、renewで新IDをgrantした後も、旧leaseで予約済みのusageを旧ID付きで受理する契約です。同一lease IDで更新されても累積使用量とpacingを初期化しません。Authorityのusage APIは加算型でidempotency keyを持たないためexact-onceは保証しません。失敗・timeoutとなったin-flight snapshotは、Authority側で加算済みか不明な結果不明snapshotとして再送せず、そのlease IDをquarantineします。明示 `capture.resume` 後もfresh Authorityが同じlease IDを返した場合はfail closedを維持し、新しいlease IDでのみ再開します。leaseは最大15秒、`maxInputAudioMs`、200 ms token-bucket burstを強制します。rateの経過時間はclient申告時刻ではなくrelayが検証済みmessageを受信した時刻で計算し、actor内待機をburstと誤認せず、実際の同時audio floodは拒否します。client pingの15秒timeoutもserver clockで判定します。
 
 `ios` はSwift Packageです。`TranslateSession` がhost注入config、明示同意、OS permission、WebSocket、route、capture、話者generation別playback、2分・最大100件のcaption memoryを結線します。字幕deltaは同じspeaker/generation/language/captionOnlyかつ2秒以内なら空白を足さずに4,096文字まで結合します。readinessはtransport、検証済みidentity、同意、マイク許可が揃って初めて1回送ります。マイクmuteと翻訳再生は独立です。
+
+翻訳PCM再生はCoreの`PlaybackScheduler`がqueued + scheduledを合計96,000 bytes以内に保ち、そのうち最大19,200 bytesを先行予約します。`AVAudioPlayerNode`の`.dataConsumed`で予約枠を補充するため、100 ms片ごとに`.dataPlayedBack`を待たず、前片の再生終了前に次片をscheduleできます。pause、exit、private route喪失、stopはqueueと予約を破棄してgenerationを更新し、旧generation/tokenのcallbackは新queueのbyte数を減らしません。Bluetooth HFP・有線headsetのprivate route制約とiOS 15.5互換を維持します。
+
+## Latencyの測定区間
+
+次の値は混ぜずに別々に記録します。
+
+- 初回接続・準備時間: 明示開始操作から、両端末のidentity、ready、private route、lease、provider設定が揃い最初の入力を受けられるまで。
+- 翻訳音声latency: 意味の対応する原文区間の発話時点から、受信側イヤフォンでその対応音声を実際に聞ける時点まで。relay/providerのaudio first byteは補助時刻であり、耳に届いた時点の代用にしません。
+- 字幕latency: 同じ原文区間から、意味の対応する字幕が受信画面に描画されるまで。
+- 発話終了後の残り再生: 原文発話終了から、その発話に対応する翻訳音声全体（終了後に生成・受信される分を含む）をイヤフォンで聞き終わるまで。
+- 遅れの蓄積: 60分の連続運転で、上記の音声latencyと残り再生が時間とともに増加するか。
+
+中央値2秒・P95 4秒は低遅延化の**仮の最適化目標**です。達成済み、公式保証、または既存の「実機で10秒以内」という公開前DoDの置換を意味しません。端末時計を同期していないclient `Date.now()`とrelay `Date.now()`の単純減算は測定値にしません。
 
 ## Room placement
 
@@ -24,4 +40,5 @@ ended tombstoneはroom最大寿命90分 + ticket最大TTL 60秒以上保持し�
 - speech boundaryは端末energyによる推定で、話者identityやcontent alignmentを保証しません。
 - latencyは `unknown` または `estimated` だけです。
 - provider final eventやprovider発話境界へ依存しません。
-- 実API audio成功とiPhone実機10秒受入は未完了です。
+- SDKは実会話の音声・字幕を保存しません。性能評価には合成音声または利用承認済み評価素材だけを使います。
+- 実API audio成功、iPhone実機10秒受入、仮目標（中央値2秒・P95 4秒）の達成確認は未完了です。

@@ -29,13 +29,19 @@ class FakeTransport implements ProviderTransport {
 
 class FakeClock implements ProviderClock {
   timers = new Map<number, () => void>();
+  durations = new Map<number, number>();
   next = 1;
-  setTimeout(handler: () => void): number {
+  now(): number { return 1_000; }
+  setTimeout(handler: () => void, ms: number): number {
     const id = this.next++;
     this.timers.set(id, handler);
+    this.durations.set(id, ms);
     return id;
   }
-  clearTimeout(handle: unknown): void { this.timers.delete(handle as number); }
+  clearTimeout(handle: unknown): void {
+    this.timers.delete(handle as number);
+    this.durations.delete(handle as number);
+  }
   fireAll(): void {
     const handlers = [...this.timers.values()];
     this.timers.clear();
@@ -104,10 +110,10 @@ describe("OpenAI provider adapter", () => {
     expect(sink.onFatal).not.toHaveBeenCalled();
   });
 
-  it("emits every non-silent even PCM delta immediately and splits only oversized deltas", () => {
+  it("emits every non-silent even PCM delta immediately and splits only oversized deltas", async () => {
     const transport = new FakeTransport();
     const sink = createSink();
-    new OpenAITranslationProvider("key", "ja", { connect: () => transport }, sink, new FakeClock());
+    const provider = new OpenAITranslationProvider("key", "ja", { connect: () => transport }, sink, new FakeClock());
     transport.open();
     transport.message(JSON.stringify({ type: "session.created", session: {} }));
     transport.message(JSON.stringify({ type: "session.updated", session: {} }));
@@ -133,8 +139,10 @@ describe("OpenAI provider adapter", () => {
     const allOutput = (sink.onOutputAudio as ReturnType<typeof vi.fn>).mock.calls
       .map(call => Buffer.from(call[0], "base64"));
     expect(Buffer.concat(allOutput)).toEqual(Buffer.concat(deltas));
+    const closing = provider.close();
     transport.message(JSON.stringify({ type: "session.closed" }));
     transport.closed();
+    await closing;
     expect(sink.onOutputAudio).toHaveBeenCalledTimes(callsBeforeClose);
   });
 
@@ -231,7 +239,136 @@ describe("OpenAI provider adapter", () => {
     const closing = provider.close(10);
     clock2.fireAll();
     await closing;
+    expect(provider.outputDrained).toBe(false);
     expect(transport2.closes.some(([, reason]) => reason === "close-timeout")).toBe(true);
+  });
+
+  it("drains tail audio with a late control ACK and confirms only session.closed", async () => {
+    const transport = new FakeTransport();
+    const sink = createSink();
+    const clock = new FakeClock();
+    const provider = new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, clock);
+    transport.open();
+    transport.message(JSON.stringify({ type: "session.created", session: {} }));
+    transport.message(JSON.stringify({ type: "session.updated", session: {} }));
+    provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"));
+    const closing = provider.close();
+    expect(provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"))).toBe(false);
+    expect(provider.outputDrained).toBe(false);
+    expect([...clock.durations.values()]).toContain(15_000);
+    transport.message(JSON.stringify({ type: "session.updated", session: {} }));
+    const tail = Buffer.from([1, 0]).toString("base64");
+    transport.message(JSON.stringify({ type: "session.output_audio.delta", delta: tail }));
+    transport.message(JSON.stringify({ type: "session.output_transcript.delta", delta: "synthetic tail" }));
+    expect(sink.onOutputAudio).toHaveBeenCalledWith(tail);
+    expect(sink.onOutputTranscript).toHaveBeenCalledWith("synthetic tail");
+    transport.message(JSON.stringify({ type: "session.closed" }));
+    await closing;
+    expect(provider.outputDrained).toBe(true);
+    expect(sink.onFatal).not.toHaveBeenCalled();
+    expect(clock.timers).toHaveLength(0);
+    transport.message(JSON.stringify({ type: "session.output_audio.delta", delta: tail }));
+    expect(sink.onOutputAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies once on unexpected socket/protocol close even with reentrant close callbacks", () => {
+    for (const protocolClose of [false, true]) {
+      const transport = new FakeTransport();
+      transport.close = () => transport.closed();
+      const sink = createSink();
+      const clock = new FakeClock();
+      const provider = new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, clock);
+      transport.open();
+      if (protocolClose) transport.message(JSON.stringify({ type: "session.closed" }));
+      else transport.closed();
+      transport.closed();
+      transport.error();
+      expect(sink.onFatal).toHaveBeenCalledExactlyOnceWith("PROVIDER_TRANSPORT");
+      expect(provider.outputDrained).toBe(false);
+      expect(provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"))).toBe(false);
+      expect(clock.timers).toHaveLength(0);
+    }
+  });
+
+  it("does not mistake a socket close without the flush ACK for output completion", async () => {
+    const transport = new FakeTransport();
+    const sink = createSink();
+    const provider = new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, new FakeClock());
+    transport.open();
+    const closing = provider.close();
+    transport.closed();
+    await closing;
+    expect(provider.outputDrained).toBe(false);
+    expect(sink.onFatal).not.toHaveBeenCalled();
+  });
+
+  it("does not confirm drain if closing discarded audio awaiting initial configuration", async () => {
+    const transport = new FakeTransport();
+    const provider = new OpenAITranslationProvider("key", "en", { connect: () => transport }, createSink(), new FakeClock());
+    provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"));
+    transport.open();
+    transport.message(JSON.stringify({ type: "session.created", session: {} }));
+    const closing = provider.close();
+    transport.message(JSON.stringify({ type: "session.updated", session: {} }));
+    transport.message(JSON.stringify({ type: "session.closed" }));
+    await closing;
+    expect(provider.outputDrained).toBe(false);
+    expect(transport.sent.filter(data => JSON.parse(data).type === "session.input_audio_buffer.append")).toHaveLength(0);
+  });
+
+  it("cancels before open without a flush claim, even if transport close throws", async () => {
+    const transport = new FakeTransport();
+    transport.close = () => { throw new Error("synthetic close failure"); };
+    const clock = new FakeClock();
+    const sink = createSink();
+    const provider = new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, clock);
+    await provider.close();
+    transport.open();
+    transport.message(JSON.stringify({ type: "session.created", session: {} }));
+    expect(provider.outputDrained).toBe(false);
+    expect(transport.sent).toHaveLength(0);
+    expect(clock.timers).toHaveLength(0);
+    expect(sink.onFatal).not.toHaveBeenCalled();
+  });
+
+  it("rejects audio after expiry even before a delayed timer callback runs", () => {
+    const transport = new FakeTransport();
+    const sink = createSink();
+    const clock = new FakeClock();
+    const provider = new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, clock);
+    transport.open();
+    transport.message(JSON.stringify({ type: "session.created", session: { expires_at: 2 } }));
+    transport.message(JSON.stringify({ type: "session.updated", session: {} }));
+    clock.now = () => 2_000;
+    expect(provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"))).toBe(false);
+    expect(sink.onFatal).toHaveBeenCalledExactlyOnceWith("PROVIDER_TRANSPORT");
+    expect(clock.timers).toHaveLength(0);
+  });
+
+  it("tracks the earliest advertised expiry and rejects expired or malformed deadlines", () => {
+    const transport = new FakeTransport();
+    const sink = createSink();
+    const clock = new FakeClock();
+    new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, clock);
+    transport.open();
+    transport.message(JSON.stringify({ type: "session.created", session: { expires_at: 3_601 } }));
+    transport.message(JSON.stringify({ type: "session.updated", session: { expires_at: 7_201 } }));
+    expect([...clock.durations.values()]).toContain(3_600_000);
+    expect(clock.timers).toHaveLength(1);
+    clock.fireNext(); // Simulate one hour without a wall-clock wait.
+    expect(sink.onFatal).toHaveBeenCalledExactlyOnceWith("PROVIDER_TRANSPORT");
+    expect(clock.timers).toHaveLength(0);
+
+    for (const expires_at of [null, "3601", 0, 0.5]) {
+      const next = new FakeTransport();
+      const nextSink = createSink();
+      new OpenAITranslationProvider("key", "en", { connect: () => next }, nextSink, new FakeClock());
+      next.open();
+      next.message(JSON.stringify({ type: "session.created", session: { expires_at } }));
+      expect(nextSink.onFatal).toHaveBeenCalledExactlyOnceWith(
+        expires_at === 0.5 ? "PROVIDER_TRANSPORT" : "PROVIDER_INVALID_PAYLOAD",
+      );
+    }
   });
 
   it("keeps the configuration timeout active until session.updated", () => {
@@ -255,30 +392,51 @@ describe("OpenAI provider adapter", () => {
     expect(sink.onFatal).toHaveBeenCalledWith("PROVIDER_INVALID_PAYLOAD");
   });
 
-  it("uses serial session.update health acknowledgements when bufferedAmount is unavailable", () => {
+  it("uses correlated native ping/pong without mutating translation settings, including silence", () => {
     const transport = new FakeTransport();
-    transport.bufferedAmount = undefined;
+    const native: ProviderTransport = transport;
+    const pings: string[] = [];
+    let pong: (payload: string) => void = () => {};
+    native.ping = payload => pings.push(payload);
+    native.onPong = handler => { pong = handler; };
     const sink = createSink();
     const clock = new FakeClock();
-    const provider = new OpenAITranslationProvider("key", "ja", { connect: () => transport }, sink, clock);
+    const provider = new OpenAITranslationProvider("key", "ja", { connect: () => native }, sink, clock);
     transport.open();
     transport.message(JSON.stringify({ type: "session.created", session: {} }));
-    transport.message(JSON.stringify({ type: "session.updated", session: {}, event_id: "server-only" }));
-    expect(clock.timers).toHaveLength(1);
+    transport.message(JSON.stringify({ type: "session.updated", session: {} }));
     clock.fireNext();
-    expect(JSON.parse(transport.sent.at(-1)!)).toEqual({
-      type: "session.update",
-      session: { audio: {} },
-    });
-    expect(clock.timers).toHaveLength(1);
-    transport.message(JSON.stringify({ type: "session.updated", session: {}, elapsed_ms: 99 }));
-    expect(clock.timers).toHaveLength(1);
+    expect(pings).toHaveLength(1);
+    const timeout = [...clock.timers.keys()][0];
+    pong("stale-pong");
+    expect([...clock.timers.keys()][0]).toBe(timeout);
+    pong(pings[0]!);
     clock.fireNext();
+    expect(pings).toHaveLength(2);
+    const nextTimeout = [...clock.timers.keys()][0];
+    pong(pings[0]!);
+    expect([...clock.timers.keys()][0]).toBe(nextTimeout);
+    expect(transport.sent.filter(data => JSON.parse(data).type === "session.update")).toHaveLength(1);
+    expect(provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"))).toBe(true);
     clock.fireNext();
-    expect(sink.onFatal).toHaveBeenCalledWith("PROVIDER_TRANSPORT");
-    expect(transport.closes).toContainEqual([1008, "PROVIDER_TRANSPORT"]);
-    expect(provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"))).toBe(false);
+    expect(sink.onFatal).toHaveBeenCalledExactlyOnceWith("PROVIDER_TRANSPORT");
     expect(clock.timers).toHaveLength(0);
+    pong(pings[1]!);
+    expect(clock.timers).toHaveLength(0);
+  });
+
+  it("rejects unobservable or invalid transport buffers before changing API settings or sending audio", () => {
+    for (const size of [undefined, NaN, -1]) {
+      const transport = new FakeTransport();
+      transport.bufferedAmount = size;
+      const sink = createSink();
+      const provider = new OpenAITranslationProvider("key", "en", { connect: () => transport }, sink, new FakeClock());
+      transport.open();
+      transport.message(JSON.stringify({ type: "session.created", session: {} }));
+      expect(sink.onFatal).toHaveBeenCalledExactlyOnceWith("PROVIDER_TRANSPORT");
+      expect(transport.sent).toHaveLength(0);
+      expect(provider.appendPcm(Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"))).toBe(false);
+    }
   });
 
   it("rejects mismatched optional provider audio metadata", () => {

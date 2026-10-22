@@ -14,7 +14,7 @@
 - leaseは最大15秒、音声量上限、200 ms burst、wall-clock rateを強制します。usageはlease単位でaggregateし、失敗後は明示resumeまで再取得しません。
 - clientのepoch timestampをserver clockと比較しません。speech boundaryは推定表示にだけ使い、v1の配信をenergy/focusで遮断しません。10秒目標は実機で測定し、遅着音声の破棄で達成扱いにしません。
 - client/provider JSON size、field、enum、base64 canonical encoding、PCM alignmentを検証します。provider未知media、binary、過大JSON、backpressureはsession停止です。未知non-media controlだけをboundedに無視します。
-- provider transportの `bufferedAmount` は未観測を0と扱いません。未観測transportでは初期設定の `session.updated` 後だけ、同時に1件の空の部分 `session.update` を5秒間隔で送り、5秒以内に `session.updated` がなければ停止します。これはtransport/control応答のliveness検査であり、翻訳成功の証明ではありません。server `event_id` や `elapsed_ms` はrequest・音声相関に使いません。
+- provider transportの `bufferedAmount` は有限・非負の観測値を必須とし、192,000 bytes超過を停止します。未観測を0と扱わず、現在のCloudflare provider transportは実通訳に使えません。Nodeはnative ping/pongを5秒間隔・5秒期限で照合します。古い/別payloadのpongは期限を延長しません。接続確認のための `session.update` は翻訳を途切れさせるため廃止しました。APIの `elapsed_ms` は音声やinputの配送ACKではなく、無音中のliveness判定にも使いません。
 - OpenAI keyはrelayだけに置き、固定の `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate` 以外へclient入力で接続しません。
 - local mockだけが無資格で動作し、loopback以外へbindしません。標準tokenは `host-ja` と `guest-en` です。
 

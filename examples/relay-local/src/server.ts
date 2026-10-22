@@ -144,6 +144,8 @@ class NodeWsFactory implements ProviderTransportFactory {
       get bufferedAmount() {
         return socket.bufferedAmount;
       },
+      ping: payload => socket.ping(payload),
+      onPong: handler => socket.on("pong", data => handler(data.toString("utf8"))),
       send: data => socket.send(data),
       close: (code, reason) => socket.close(code, reason),
       onOpen: handler => socket.on("open", handler),

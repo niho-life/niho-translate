@@ -82,9 +82,11 @@ async function checkProvider(pcm: Buffer): Promise<{ exact: boolean; input: bool
   }
   const outputBeforeClose = Buffer.concat(output);
   const outputChunksBeforeClose = output.length;
+  const closing = provider.close();
   transport.message({ type: "session.closed" });
   assert.equal(output.length, outputChunksBeforeClose);
-  await provider.close();
+  await closing;
+  assert.equal(provider.outputDrained, true);
   return {
     exact: !fatal && normalizePcmSilence(outputBeforeClose).equals(normalizePcmSilence(pcm)),
     input: Buffer.concat(input).equals(padded),

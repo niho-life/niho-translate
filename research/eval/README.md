@@ -74,7 +74,8 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 2. LLM 判定器（既定 `gpt-5.4`、`--model` で変更可）に、正解区間（id, startMs, endMs, text, facts）と英語の文（単語時刻付き）を渡し、区間ごとに `JudgedSegment` を返させる（JSON schema で強制）。1 回の呼び出しは 15 区間程度に分け、前後の区間を文脈として渡す。
 3. 指標: `lStartMs = enStartMs − startMs`、`lEndMs = enStartMs − endMs`、`lTailMs = enEndMs − endMs`。`enStartMs` は **その区間の意味を担う最初の英単語**の時刻（導入の無関係語・前区間の残りは含めない）。`backchannel` は遅延統計から除外、`aligned=false`（訳が無い）は欠落として `meaning=0`、遅延は null にして件数を分母に残す。
 4. `critical fact error` = type が `CRITICAL_FACT_TYPES`（number/time/amount/negation/place/subject/condition）の fact で verdict `wrong`。`omitted` は別に数え、型ごとの wrong 件数を `factErrorsByType` に残す。
-   - whisper-1 は長い無音で幻聴（"Thank you for watching." 等）を出すため、判定器は 2 秒を超える無音を 1 秒に詰めて送り、時刻を元へ戻す。語頭が完全無音に掛かる場合は音の出る位置へ寄せる。
+   - whisper-1 は長い無音で幻聴（"Thank you for watching." 等）を出すため、判定器は `output-timeline.wav` をエネルギーで有声区間に分けて区間ごとに文字起こしし、区間の開始を足して時刻を戻す（無音は送らない）。prompt にはエンジン字幕から抜いた数字・固有名詞などのキーワードだけを渡す（字幕の文を渡すと whisper がその内容を飛ばした）。
+   - ASR 語とエンジン字幕の一致率（`asrAgreement`、全体と 1 分ごと）を記録し、60% 未満の分は gpt-4o-transcribe で再確認して report.md に「エンジンの音声が字幕と違う」か「判定不能」かを記す。一致率が低い分は、聞き手に字幕と違う英語が流れた候補として扱う。
    - `--effort`（判定モデルの推論の深さ）は `judge.effort` に記録する。
 5. `aggregate` は `JudgeAggregate`。`within8s` は statement/question の分母に対する割合。`report.md` は private（本文を含む）、stdout は aggregate のみ。
 6. `src/aggregate.ts --runs <runDir...>` は複数 run の `summary.json` と `judgement.json` から Markdown 表（数値のみ）を作る。

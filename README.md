@@ -54,6 +54,7 @@ protocol v1は全server eventに接続単位で単調増加する `deliveryId` �
 - [セキュリティ](docs/security.md)
 - [受入項目](docs/acceptance.md)
 - [同時通訳の品質・遅延改善：調査と実装者向け実験仕様](docs/translation-quality-research.md)
+- [日英同時通訳 比較評価 2026-10-28（現行 / gpt-live-1 / realtime VAD / cascade）](docs/translation-quality-eval-2026-10-28.md)・[比較評価ハーネス](research/eval/README.md)
 
 実通訳のtransportは送信バッファを観測できるNode版relayを使います。現在のCloudflare例は未観測のためprovider設定前に安全停止します。翻訳中の設定更新をheartbeatに使わず、Nodeのnative ping/pongで生存を確認します。詳しくは [Node版の運用条件](examples/relay-local/README.md) を参照してください。
 

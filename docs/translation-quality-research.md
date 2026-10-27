@@ -2,6 +2,8 @@
 
 調査日：2026-10-28。対象：v1の日英2人対面通訳、iPhoneとprivate headset。追跡Issue：[2026年の同時通訳品質・遅延改善 #21](https://github.com/niho-life/niho-translate/issues/21)。
 
+**2026-10-28 追記:** この文書の測定設計に沿って A（現行）/ B（`gpt-live-1`）/ B2（realtime VAD）/ D'（cascade 試作）を同条件で比較した結果は [translation-quality-eval-2026-10-28.md](translation-quality-eval-2026-10-28.md)、ハーネスは [research/eval](../research/eval/README.md)。
+
 この文書は、次の実装担当が**何を先に試し、どの結果で採否を決めるか**を記す。公開資料にある機能、NIHOの現行コード、実測済みの範囲、未検証の仮説を分ける。製品としての性能保証や、他社製品の内部実装の断定ではない。
 
 ## 1. 結論と優先順位

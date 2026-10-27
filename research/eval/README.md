@@ -1,0 +1,98 @@
+# 同時通訳 比較評価ハーネス（research/eval）
+
+追跡Issue: [#21](https://github.com/niho-life/niho-translate/issues/21)。設計の背景は [docs/translation-quality-research.md](../../docs/translation-quality-research.md)。
+
+目的: 同じ日本語音声を実時間で複数の通訳エンジンへ流し、**意味対応する英語音声の開始遅延**と**意味精度**を同じ正解原稿・同じ判定器で比較する。オーナー基準は「発話開始→対応する英語音声の開始が概ね5秒、最大8秒」「日本語の文意が伝わる英語」。
+
+このディレクトリは公開リポジトリの一部である。**音声・原文・訳文・実データのpath・APIキーをここに置かない。** 実データと実行結果は `EVAL_PRIVATE_DIR`（Git管理外の私有フォルダ）にだけ書く。
+
+## 1. 構成と担当
+
+| path | 役割 | 担当 |
+|---|---|---|
+| `src/engine.ts` | エンジン契約・スキーマ（本文書と一体。変更はメイン担当のみ） | main |
+| `src/prompts/` | 通訳指示プリセットと合成用語集（変更はメイン担当のみ） | main |
+| `src/run.ts`, `src/audio.ts`, `src/timeline.ts`, `src/pacing.ts`, `src/engines/openai-translate.ts`, `src/engines/openai-live.ts`, `src/engines/openai-realtime.ts`, `src/engines/index.ts` | ハーネス本体と OpenAI 3 エンジン | agent A |
+| `src/engines/cascade/**` | カスケード型（ASR→区切り→LLM訳→TTS）の試作。`src/engines/cascade/index.ts` が `EngineFactory` を export する | agent B |
+| `src/reference/**` | 正解原稿（時刻付き日本語区間）作成ツール | agent C |
+| `src/judge/**`, `src/aggregate.ts` | 判定器（EN 単語時刻→区間対応→意味採点）と集計 | agent D |
+| `tests/` | 純関数の単体テスト（担当ごとにファイルを分ける: `harness-*.test.ts`, `cascade-*.test.ts`, `reference-*.test.ts`, `judge-*.test.ts`） | 各担当 |
+
+`src/engines/index.ts` は `engineId → EngineFactory` の表。agent A が作り、`cascade` は `./cascade/index.ts` の default export を lazy import する（B が未完成でも A の typecheck が通るよう、import 失敗は実行時エラーにする）。
+
+## 2. 時間基準と実時間送信
+
+- 入力は ffmpeg で 24 kHz mono PCM16 に変換した window（`--window start:end` 秒）。
+- `t0` = 最初の frame を `engine.appendPcm` に渡した瞬間（`performance.now()`）。以後の時刻 `t` はすべて t0 からの ms。`engine.start()` 完了は負の `t` で記録。
+- frame `i` は `t0 + i*frameMs` に送る（絶対時刻へのスケジューリング、drift 補正あり）。実送信との差 `late` を記録。無音も含め全部送る。
+- window 終端後、`--tail-silence-sec`（既定 6）の完全無音を実時間で送り、その後 `engine.finish()`。finish は最大 `--finish-timeout-sec`（既定 20）待つ。
+- 出力音声は到着順に **理想再生モデル**へ入れる: `playStart_k = max(t_k, playEnd_{k-1})`, `playEnd_k = playStart_k + bytes_k / 48`。`queueMs_k = max(0, playEnd_{k-1} − t_k)`。iOS の保持上限 96,000 byte（2,000 ms）超えを `over2000` として数える。
+- 字幕 delta の `t` は到着時刻。
+
+## 3. 実行結果（すべて `EVAL_PRIVATE_DIR/runs/<runId>/`）
+
+`runId = <YYYYMMDD-HHMMSS>-<engineId>-<sourceId>-<4文字乱数>`。
+
+| file | 内容 |
+|---|---|
+| `config.json` | `EngineConfig` と CLI 引数（入力 path は含めない。`sourceId` だけ） |
+| `events.jsonl` | `RunEvent` を 1 行ずつ（本文を含む。private） |
+| `summary.json` | `RunSummary`（本文なし。公開レポートへ転記可） |
+| `source.wav` | 送った window（24 kHz mono、tail silence を含む） |
+| `output-timeline.wav` | 訳音声を `playStart` の位置に置き、隙間を無音で埋めた 24 kHz mono。**ファイル内時刻 = t** |
+| `mixed.wav` | stereo 24 kHz。L = source（0.8 倍）、R = output-timeline。人が同時性を聴くため |
+| `output-transcript.txt` | `t<TAB>text` の行。訳字幕 delta |
+| `input-transcript.txt` | 同、原文字幕（取れたエンジンだけ） |
+
+stdout には `summary.json` の内容だけを JSON で出す。本文・path・鍵を出さない。
+
+## 4. エンジンとオプション（`--engine <id> --option k=v ...`）
+
+| engineId | 経路 | options（既定値） |
+|---|---|---|
+| `openai-translate` | 現行製品経路。`packages/provider-openai` の `OpenAITranslationProvider` を relay-local と同じ Node `ws` transport で使う（出力の完全無音 200 ms 上限まで製品と同じ）。既定以外のオプションは provider と同じ event 処理・無音規則を持つ薄い client で送る | `noiseReduction=near_field|far_field|none`（near_field）、`inputTranscription=0|1`（0。1 で `audio.input.transcription.model=gpt-realtime-whisper` の原文字幕を取る） |
+| `openai-live` | `wss://api.openai.com/v1/live/sessions`、`session.start` に `model: gpt-live-1`、`instructions`、`audio.format {audio/pcm, 24000}`。`session.input_audio.append` で送る。`session.output_audio.delta` / `session.output_transcript.delta` / `session.input_transcript.delta` を受ける。終端は `session.close`→`session.closed` | `preset=plain|domain|domain-glossary`（domain）、`voice`（marin） |
+| `openai-realtime` | Realtime API `session.update {type: realtime}`、`output_modalities: ["audio"]`、`audio.input.turn_detection`、`instructions`。`response.output_audio.delta` / `response.output_audio_transcript.delta` を受ける | `model=gpt-realtime-2.1|gpt-realtime-2.1-mini`（2.1）、`vad=semantic:high|semantic:medium|semantic:low|server:<silence_ms>`（semantic:high）、`interrupt=0|1`（0）、`preset`（domain）、`inputTranscription=0|1`（0） |
+| `cascade` | `gpt-live-transcribe`（streaming ASR）→ 日本語の節単位の区切り → LLM 訳（直前文脈つき）→ streaming TTS。agent B の設計書 `src/engines/cascade/README.md` を正とする | B が定義（`asrDelay`, `segmenter`, `llm`, `tts`, `context`, `glossary` など） |
+
+通訳指示は `src/prompts/interpreter.ts` の `buildInterpreterInstructions(preset, source, target)`。用語集は `src/prompts/glossary.ts`（合成・公開情報のみ）。cascade も同じ用語集を ASR keywords と LLM prompt に使う。
+
+費用の目安（2026-10-28 公示）: translate $0.034/分、live $0.05/分、realtime は token 課金（audio in $32 / out $64 per 1M）、gpt-live-transcribe ≈ $0.006/分級、gpt-4o-mini-tts $12/1M audio tokens。`costUsd` は分かる範囲で推定、不明なら undefined。
+
+## 5. 正解原稿（agent C、`EVAL_PRIVATE_DIR/reference/<sourceId>.json`）
+
+`ReferenceDocument`。区間は **意味の確定する節または文**（目安 2〜12 秒）。長い文は述語（または接続助詞）で切る。「はい」「うん」だけの区間は `kind: backchannel`（遅延統計から除外）。質問は `question`。言い直し・断片は `fragment`。
+
+- 時刻は whisper-1（`response_format=verbose_json`, `timestamp_granularities[]=word,segment`, `language=ja`）の単語時刻から。`gpt-4o-transcribe-diarize` の区間と話者ラベルで話者を補う。ローカル `whisper-cli`（large-v3-turbo）を第 3 の照合に使ってよい。
+- 本文は ASR 出力を、録音に付属する既存の文字起こし（オーナー提供・人手未校正）と照合して直す。3 系統が食い違う箇所は `uncertain: true`。
+- `facts` は数・期間・金額・時刻・否定・固有名詞・条件・主体・時制を、原文の表記で列挙する（判定器が各 fact の保存を採点する）。
+- 原稿作成に LLM（gpt-5.4 系）を使ってよいが、本文を公開物へ出さない。
+
+## 6. 判定（agent D、run ディレクトリ内に `output-words.json`, `judgement.json`, `report.md`）
+
+1. `output-timeline.wav` を whisper-1（`language=en`, word timestamps）で文字起こしし、各英単語に **t（ms）** を付ける。ファイル内時刻 = t なので変換不要。
+2. LLM 判定器（既定 `gpt-5.4`、`--model` で変更可）に、正解区間（id, startMs, endMs, text, facts）と英語の文（単語時刻付き）を渡し、区間ごとに `JudgedSegment` を返させる（JSON schema で強制）。1 回の呼び出しは 15 区間程度に分け、前後の区間を文脈として渡す。
+3. 指標: `lStartMs = enStartMs − startMs`、`lEndMs = enStartMs − endMs`、`lTailMs = enEndMs − endMs`。`enStartMs` は **その区間の意味を担う最初の英単語**の時刻（導入の無関係語・前区間の残りは含めない）。`backchannel` は遅延統計から除外、`aligned=false`（訳が無い）は欠落として `meaning=0`、遅延は null にして件数を分母に残す。
+4. `critical fact error` = type が number/time/amount/negation/subject/condition の fact で verdict `wrong`。`omitted` は別に数える。
+5. `aggregate` は `JudgeAggregate`。`within8s` は statement/question の分母に対する割合。`report.md` は private（本文を含む）、stdout は aggregate のみ。
+6. `src/aggregate.ts --runs <runDir...>` は複数 run の `summary.json` と `judgement.json` から Markdown 表（数値のみ）を作る。
+
+## 7. 実行
+
+```sh
+export EVAL_PRIVATE_DIR=/path/to/private/eval
+export OPENAI_API_KEY="$(gcloud secrets versions access latest --secret=AI_OPERATIONS_OPENAI_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
+npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-translate --frame-ms 200
+npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json"
+npm --silent run eval:aggregate -- --runs "$EVAL_PRIVATE_DIR"/runs/*
+```
+
+`npm run typecheck` と `npm test`（vitest、純関数のみ。外部 API・実音声を使わない）を通す。実 API を使う検証は `EVAL_PRIVATE_DIR` 配下だけに書き、結果の数値だけを報告する。
+
+## 8. 共通の禁止事項
+
+- 鍵を引数・ファイル・ログ・エラーメッセージに出さない。`OPENAI_API_KEY` は環境変数からだけ読む。
+- 原文・訳文・音声・実データの path を `research/**`、tests、CI、stdout に出さない（stdout は集計 JSON のみ）。
+- `packages/**`、`ios/**`、`examples/**`、`scripts/**` を変更しない（製品経路の比較対象を固定するため）。
+- 他担当の path を編集しない。`engine.ts`・`prompts/**`・本 README の変更が必要なら、変更内容をメイン担当へ報告して止まる。
+- commit・push・PR・Issue 操作をしない。git stash を使わない。他 CLI / 他 agent への再委任をしない。

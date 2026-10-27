@@ -109,7 +109,9 @@ export interface RunSummary {
 }
 
 /** 正解原稿（private）。startMs/endMs は window 先頭からの ms。 */
-export type FactType = "number" | "time" | "amount" | "negation" | "proper_noun" | "condition" | "subject" | "tense";
+export type FactType = "number" | "time" | "amount" | "negation" | "place" | "proper_noun" | "condition" | "subject" | "tense";
+/** 重大誤訳として数える fact の型（調査文書 §6: 否定・条件・金額・日付・主体・地名）。 */
+export const CRITICAL_FACT_TYPES: ReadonlyArray<FactType> = ["number", "time", "amount", "negation", "place", "condition", "subject"];
 export interface ReferenceFact { readonly type: FactType; readonly text: string; readonly note?: string }
 export interface ReferenceSegment {
   readonly id: string;
@@ -164,13 +166,15 @@ export interface JudgeAggregate {
   readonly meaningDist: Readonly<Record<"0" | "1" | "2" | "3", number>>;
   readonly factTotals: Readonly<Record<FactVerdict, number>>;
   readonly criticalFactErrors: number;
+  /** 型ごとの verdict=wrong 件数。 */
+  readonly factErrorsByType?: Readonly<Partial<Record<FactType, number>>>;
   readonly flagCounts: Readonly<Partial<Record<JudgeFlag, number>>>;
 }
 export interface JudgeDocument {
   readonly runId: string;
   readonly sourceId: string;
   readonly engineId: string;
-  readonly judge: { readonly model: string; readonly promptVersion: string; readonly asr: string };
+  readonly judge: { readonly model: string; readonly promptVersion: string; readonly asr: string; readonly effort?: string };
   readonly segments: ReadonlyArray<JudgedSegment>;
   readonly aggregate: JudgeAggregate;
 }

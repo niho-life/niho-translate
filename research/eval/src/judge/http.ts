@@ -9,7 +9,7 @@ export interface Usage {
   readonly reasoningTokens: number;
 }
 
-/** sk- で始まる文字列（sk-ant-… とマスク済みを含む）を伏せ、長さを切る。 */
+/** sk- で始まる文字列（OpenAI・Anthropic の鍵、マスク済みを含む）を伏せ、長さを切る。 */
 export function redactSecrets(text: string): string {
   return text.replace(/sk-[A-Za-z0-9_\-*]{4,}/g, "sk-***").slice(0, 400);
 }

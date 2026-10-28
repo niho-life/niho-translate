@@ -66,12 +66,12 @@ describe("stream events", () => {
 
   it("throws on an error event without leaking a key", () => {
     const state = newStreamState();
-    expect(() => applyStreamEvent(state, { type: "error", error: { type: "overloaded_error", message: "Overloaded sk-ant-api03-secret" } })).toThrow(OpenAIRequestError);
+    expect(() => applyStreamEvent(state, { type: "error", error: { type: "overloaded_error", message: "Overloaded sk-test-abcdefgh" } })).toThrow(OpenAIRequestError);
     try {
-      applyStreamEvent(state, { type: "error", error: { type: "overloaded_error", message: "Overloaded sk-ant-api03-secret" } });
+      applyStreamEvent(state, { type: "error", error: { type: "overloaded_error", message: "Overloaded sk-test-abcdefgh" } });
     } catch (e) {
       expect((e as Error).message).toContain("overloaded_error");
-      expect((e as Error).message).not.toContain("secret");
+      expect((e as Error).message).not.toContain("abcdefgh");
     }
   });
 });

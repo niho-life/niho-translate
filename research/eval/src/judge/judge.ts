@@ -1,8 +1,10 @@
 /**
  * 判定 CLI（agent D）。
- *   --run <runDir> --reference <abs json> [--judge-backend openai|agy] [--model <id>] [--skip-asr]
+ *   --run <runDir> --reference <abs json> [--judge-backend openai|agy|anthropic] [--model <id>] [--skip-asr]
  *   [--batch 15（agy は 8）] [--prompt-version v1] [--effort medium] [--out-name judgement.json]
- * --model の既定は openai なら gpt-5.4、agy なら claude-opus-4-6-thinking（judge.model は "agy:<id>"）。
+ * --model の既定は openai なら gpt-5.4、agy なら claude-opus-4-6-thinking、anthropic なら claude-opus-5-5
+ *（judge.model は "agy:<id>" / "anthropic:<id>"）。anthropic は Anthropic API を直接呼ぶ第二審判（鍵は ANTHROPIC_API_KEY）。
+ * --effort の既定は openai medium / anthropic high / agy なし。
  * 出力: runDir/output-words.json と、--out-name（既定 judgement.json）・対応する report*.md（いずれも private）。
  * stdout は JudgeAggregate の JSON だけ。本文・path・鍵を出さない。
  */
@@ -10,6 +12,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { JudgeDocument, JudgedSegment, ReferenceSegment } from "../engine.ts";
 import { isCurrentOutputWords, parseOutputWords, transcribeTimeline } from "./asr.ts";
 import { AGY_DEFAULT_MODEL, AGY_EFFORTS, agyPrompt, isAgyQuotaError, runAgy, type AgySchemaMode } from "./agy.ts";
+import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORTS, createAnthropicJsonResponse } from "./anthropic.ts";
 import { outputNames, parseReference, readBytes, readJson, readJsonIfExists, readRunMeta, readTextIfExists, writeText, type RunMeta } from "./files.ts";
 import { computeAggregate, resolveSegment } from "./metrics.ts";
 import { createJsonResponse, redactSecrets, supportsReasoning, type Usage } from "./openai.ts";
@@ -30,7 +33,7 @@ import { parseTranscript } from "./transcript.ts";
 import type { BatchPlan, EnSentence, OutputWord, OutputWordsDocument, RawSegmentJudgement } from "./types.ts";
 import { parseWav } from "./wav.ts";
 
-export type JudgeBackend = "openai" | "agy";
+export type JudgeBackend = "openai" | "agy" | "anthropic";
 
 export interface JudgeArgs {
   readonly runDir: string;
@@ -42,7 +45,7 @@ export interface JudgeArgs {
   readonly skipAsr: boolean;
   readonly batch: number;
   readonly promptVersion: string;
-  /** openai は既定 medium。agy はモデルごとに対応が違うので、明示したときだけ渡す（null = 渡さない）。 */
+  /** openai は既定 medium、anthropic は既定 high。agy はモデルごとに対応が違うので、明示したときだけ渡す（null = 渡さない）。 */
   readonly effort: string | null;
   /** agy の出力の形の強制方法（prompt = schema を prompt に書いて 1 回で答えさせる）。 */
   readonly agySchema: AgySchemaMode;
@@ -51,7 +54,7 @@ export interface JudgeArgs {
 const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const OPENAI_DEFAULT_MODEL = "gpt-5.4";
 /** agy は 1 回 10〜60 秒かかり、並列は 2 まで。 */
-const CONCURRENCY: Readonly<Record<JudgeBackend, number>> = { openai: 3, agy: 2 };
+const CONCURRENCY: Readonly<Record<JudgeBackend, number>> = { openai: 3, agy: 2, anthropic: 3 };
 /** 出力が溜まった run では、最大 queue より後ろまで英語を見せる。 */
 const QUEUE_MARGIN_MS = 15_000;
 
@@ -78,12 +81,12 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   if (!runDir) throw new Error("--run <runDir> is required");
   if (!referencePath || !isAbsolute(referencePath)) throw new Error("--reference <absolute json path> is required");
   const backend = values.get("--judge-backend") ?? "openai";
-  if (backend !== "openai" && backend !== "agy") throw new Error("--judge-backend must be openai or agy");
+  if (backend !== "openai" && backend !== "agy" && backend !== "anthropic") throw new Error("--judge-backend must be openai, agy or anthropic");
   // agy は 1 回の応答が長いと時間上限に掛かるので、既定の区間数を小さくする
   const batch = Number(values.get("--batch") ?? (backend === "agy" ? "8" : "15"));
   if (!Number.isInteger(batch) || batch < 1 || batch > 50) throw new Error("--batch must be an integer in 1..50");
-  const effort = values.get("--effort") ?? (backend === "agy" ? null : "medium");
-  const allowed = backend === "agy" ? AGY_EFFORTS : EFFORTS;
+  const effort = values.get("--effort") ?? (backend === "agy" ? null : backend === "anthropic" ? "high" : "medium");
+  const allowed = backend === "agy" ? AGY_EFFORTS : backend === "anthropic" ? ANTHROPIC_EFFORTS : EFFORTS;
   if (effort !== null && !allowed.has(effort)) throw new Error(`--effort must be one of ${[...allowed].join(", ")} for ${backend}`);
   const outName = values.get("--out-name") ?? "judgement.json";
   outputNames(outName);
@@ -95,7 +98,7 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
     referencePath,
     backend,
     outName,
-    model: values.get("--model") ?? (backend === "agy" ? AGY_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL),
+    model: values.get("--model") ?? (backend === "agy" ? AGY_DEFAULT_MODEL : backend === "anthropic" ? ANTHROPIC_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL),
     skipAsr,
     batch,
     promptVersion: values.get("--prompt-version") ?? DEFAULT_PROMPT_VERSION,
@@ -153,7 +156,7 @@ interface BatchResult {
 
 /** 選んだ backend で 1 回判定する（構造化出力の JSON を返す）。 */
 async function callJudge(
-  ctx: { apiKey: string; args: JudgeArgs; instructions: string },
+  ctx: { apiKey: string; anthropicKey: string; args: JudgeArgs; instructions: string },
   input: string,
   schema: Record<string, unknown>,
 ): Promise<{ value: unknown; usage: Usage }> {
@@ -163,6 +166,16 @@ async function callJudge(
       prompt: agyPrompt(ctx.instructions, input, ctx.args.agySchema === "prompt" ? schema : undefined),
       schema,
       schemaMode: ctx.args.agySchema,
+      ...(ctx.args.effort ? { effort: ctx.args.effort } : {}),
+    });
+  }
+  if (ctx.args.backend === "anthropic") {
+    return createAnthropicJsonResponse({
+      apiKey: ctx.anthropicKey,
+      model: ctx.args.model,
+      instructions: ctx.instructions,
+      input,
+      schema,
       ...(ctx.args.effort ? { effort: ctx.args.effort } : {}),
     });
   }
@@ -179,7 +192,7 @@ async function callJudge(
 
 async function judgeBatch(
   plan: BatchPlan,
-  ctx: { apiKey: string; args: JudgeArgs; instructions: string; words: ReadonlyArray<OutputWord>; sentences: ReadonlyArray<EnSentence>; total: number },
+  ctx: { apiKey: string; anthropicKey: string; args: JudgeArgs; instructions: string; words: ReadonlyArray<OutputWord>; sentences: ReadonlyArray<EnSentence>; total: number },
 ): Promise<BatchResult> {
   const zero: Usage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
   if (plan.wordLo > plan.wordHi) {
@@ -238,6 +251,7 @@ export async function main(argv: ReadonlyArray<string>): Promise<void> {
   const args = parseJudgeArgs(argv);
   const instructions = judgeInstructions(args.promptVersion);
   const apiKey = process.env.OPENAI_API_KEY?.trim() || undefined;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim() || undefined;
   const meta = await readRunMeta(args.runDir);
   const reference = parseReference(await readJson(args.referencePath));
   if (reference.sourceId !== meta.sourceId) throw new Error("reference sourceId does not match the run sourceId");
@@ -255,8 +269,9 @@ export async function main(argv: ReadonlyArray<string>): Promise<void> {
   const plans = planBatches(reference.segments, words, { batchSize: args.batch, beforeMs: WINDOW_BEFORE_MS, afterMs: windowAfterMs });
   const needsLlm = plans.some((p) => p.wordLo <= p.wordHi);
   if (needsLlm && args.backend === "openai" && !apiKey) throw new Error("OPENAI_API_KEY is not set");
+  if (needsLlm && args.backend === "anthropic" && !anthropicKey) throw new Error("ANTHROPIC_API_KEY is not set");
   const results = await mapPool(plans, CONCURRENCY[args.backend], (plan) =>
-    judgeBatch(plan, { apiKey: apiKey ?? "", args, instructions, words, sentences, total: plans.length }),
+    judgeBatch(plan, { apiKey: apiKey ?? "", anthropicKey: anthropicKey ?? "", args, instructions, words, sentences, total: plans.length }),
   );
   const raw = new Map<string, RawSegmentJudgement>();
   let usage: Usage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
@@ -272,9 +287,9 @@ export async function main(argv: ReadonlyArray<string>): Promise<void> {
   const aggregate = computeAggregate(segments);
   // asrAgreement は JudgeDocument の型に無い欄（judge.asr の横に置く。stdout の aggregate には出さない）。
   const agreement = wordsDoc.agreement;
-  const effortUsed = args.effort !== null && (args.backend === "agy" || supportsReasoning(args.model));
+  const effortUsed = args.effort !== null && (args.backend !== "openai" || supportsReasoning(args.model));
   const judgeInfo = {
-    model: args.backend === "agy" ? `agy:${args.model}` : args.model,
+    model: args.backend === "openai" ? args.model : `${args.backend}:${args.model}`,
     promptVersion: args.promptVersion,
     asr: wordsDoc.asr.model,
     ...(effortUsed ? { effort: args.effort } : {}),

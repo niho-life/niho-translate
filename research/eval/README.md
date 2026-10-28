@@ -72,7 +72,7 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 ## 6. 判定（agent D、run ディレクトリ内に `output-words.json`, `judgement.json`, `report.md`）
 
 1. `output-timeline.wav` を whisper-1（`language=en`, word timestamps）で文字起こしし、各英単語に **t（ms）** を付ける。ファイル内時刻 = t なので変換不要。
-2. LLM 判定器（既定 `gpt-5.4`、`--model` で変更可）に、正解区間（id, startMs, endMs, text, facts）と英語の文（単語時刻付き）を渡し、区間ごとに `JudgedSegment` を返させる（JSON schema で強制）。1 回の呼び出しは 15 区間程度に分け、前後の区間を文脈として渡す。
+2. LLM 判定器（既定 `gpt-5.4`、`--model` で変更可。`--judge-backend anthropic` で Claude（Anthropic API、既定 `claude-opus-5-5`・effort `high`）を第二審判にできる。`agy` は Antigravity CLI 経由の Claude）に、正解区間（id, startMs, endMs, text, facts）と英語の文（単語時刻付き）を渡し、区間ごとに `JudgedSegment` を返させる（JSON schema で強制）。1 回の呼び出しは 15 区間程度に分け、前後の区間を文脈として渡す。
 3. 指標: `lStartMs = enStartMs − startMs`、`lEndMs = enStartMs − endMs`、`lTailMs = enEndMs − endMs`。`enStartMs` は **その区間の意味を担う最初の英単語**の時刻（導入の無関係語・前区間の残りは含めない）。`backchannel` は遅延統計から除外、`aligned=false`（訳が無い）は欠落として `meaning=0`、遅延は null にして件数を分母に残す。
 4. `critical fact error` = type が `CRITICAL_FACT_TYPES`（number/time/amount/negation/place/subject/condition）の fact で verdict `wrong`。`omitted` は別に数え、型ごとの wrong 件数を `factErrorsByType` に残す。
    - whisper-1 は長い無音で幻聴（"Thank you for watching." 等）を出すため、判定器は `output-timeline.wav` をエネルギーで有声区間に分けて区間ごとに文字起こしし、区間の開始を足して時刻を戻す（無音は送らない）。prompt にはエンジン字幕から抜いた数字・固有名詞などのキーワードだけを渡す（字幕の文を渡すと whisper がその内容を飛ばした）。
@@ -86,8 +86,11 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 ```sh
 export EVAL_PRIVATE_DIR=/path/to/private/eval
 export OPENAI_API_KEY="$(gcloud secrets versions access latest --secret=AI_OPERATIONS_OPENAI_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
+export ANTHROPIC_API_KEY="$(gcloud secrets versions access latest --secret=AI_OPERATIONS_ANTHROPIC_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
 npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-translate --frame-ms 200
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json"
+# 第二審判（Claude）。--skip-asr で既存の output-words.json を使い、OpenAI を呼ばない
+npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/gemini/src1-w1.json" --judge-backend anthropic --skip-asr --out-name judgement-claude.json
 npm --silent run eval:aggregate -- --runs "$EVAL_PRIVATE_DIR"/runs/*
 ```
 
@@ -95,7 +98,7 @@ npm --silent run eval:aggregate -- --runs "$EVAL_PRIVATE_DIR"/runs/*
 
 ## 8. 共通の禁止事項
 
-- 鍵を引数・ファイル・ログ・エラーメッセージに出さない。`OPENAI_API_KEY` は環境変数からだけ読む。
+- 鍵を引数・ファイル・ログ・エラーメッセージに出さない。`OPENAI_API_KEY`・`ANTHROPIC_API_KEY` は環境変数からだけ読む。
 - 原文・訳文・音声・実データの path を `research/**`、tests、CI、stdout に出さない（stdout は集計 JSON のみ）。
 - `packages/**`、`ios/**`、`examples/**`、`scripts/**` を変更しない（製品経路の比較対象を固定するため）。
 - 他担当の path を編集しない。`engine.ts`・`prompts/**`・本 README の変更が必要なら、変更内容をメイン担当へ報告して止まる。

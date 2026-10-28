@@ -1,51 +1,12 @@
 /**
  * OpenAI HTTP 呼び出し（Node 24 の fetch だけ）。鍵は引数で受け、エラーに出さない。
+ * 再試行・伏せ字・Usage は http.ts（Anthropic と共有）。
  */
+import { fetchWithRetry, redactSecrets, type Usage } from "./http.ts";
+
+export { redactSecrets, type Usage };
 
 const API_BASE = "https://api.openai.com/v1";
-const RETRY_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
-
-export interface Usage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly reasoningTokens: number;
-}
-
-/** sk- で始まる文字列（マスク済みを含む）を伏せ、長さを切る。 */
-export function redactSecrets(text: string): string {
-  return text.replace(/sk-[A-Za-z0-9_\-*]{4,}/g, "sk-***").slice(0, 400);
-}
-
-async function errorSummary(res: Response): Promise<string> {
-  let detail = "";
-  try {
-    const body: unknown = await res.json();
-    const err = typeof body === "object" && body !== null ? (body as { error?: { type?: unknown; code?: unknown; message?: unknown } }).error : undefined;
-    if (err) detail = [err.type, err.code, err.message].filter((v) => typeof v === "string" && v).join(": ");
-  } catch {
-    // 本文を出さない
-  }
-  return redactSecrets(`HTTP ${res.status}${detail ? ` ${detail}` : ""}`);
-}
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** 一時的な失敗（429/5xx/通信）だけ最大 attempts 回まで再試行する。 */
-async function fetchWithRetry(url: string, init: () => RequestInit, label: string, attempts = 4, timeoutMs = 300_000): Promise<Response> {
-  let lastError = "";
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const res = await fetch(url, { ...init(), signal: AbortSignal.timeout(timeoutMs) });
-      if (res.ok) return res;
-      lastError = await errorSummary(res);
-      if (!RETRY_STATUS.has(res.status)) break;
-    } catch (error) {
-      lastError = redactSecrets(error instanceof Error ? `${error.name}: ${error.message}` : "network error");
-    }
-    if (attempt < attempts) await sleep(1_500 * 2 ** (attempt - 1));
-  }
-  throw new Error(`${label} failed: ${lastError}`);
-}
 
 export interface WhisperWord {
   readonly word: string;

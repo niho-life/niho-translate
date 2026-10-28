@@ -86,7 +86,7 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 ```sh
 export EVAL_PRIVATE_DIR=/path/to/private/eval
 export OPENAI_API_KEY="$(gcloud secrets versions access latest --secret=AI_OPERATIONS_OPENAI_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
-export ANTHROPIC_API_KEY="$(gcloud secrets versions access latest --secret=AI_OPERATIONS_ANTHROPIC_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
+export ANTHROPIC_API_KEY="$(gcloud secrets versions access latest --secret=NIHO_TRANSLATE_ANTHROPIC_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
 npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-translate --frame-ms 200
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json"
 # 既定の判定器は Claude（ANTHROPIC_API_KEY）。gpt-5.4 で判定するなら --judge-backend openai。--skip-asr で既存の output-words.json を再利用する

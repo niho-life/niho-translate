@@ -35,7 +35,7 @@ async function errorMessage(response: Response): Promise<string> {
 }
 
 /** 429 / 5xx / 通信失敗だけ最大 retries 回やり直す。 */
-async function postWithRetry(url: string, init: () => RequestInit, retries = 2): Promise<Response> {
+export async function postWithRetry(url: string, init: () => RequestInit, retries = 2): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) await sleep(attempt * 4_000);

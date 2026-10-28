@@ -22,4 +22,6 @@ real modeもloopbackへbindします。TLS終端proxyを前に置き、iPhoneの
 
 providerの送信量はnative `bufferedAmount`で上限を検証します。native ping/pongは5秒間隔・5秒期限で固有payloadを照合し、無音中も翻訳設定を変えません。音声・字幕・APIレスポンス本文をログへ出しません。
 
+`TRANSLATE_PROVIDER=live`（既定は`translate`）で、providerをGPT-Live（`gpt-live-1`、固定の`wss://api.openai.com/v1/live/sessions`）の`packages/provider-openai-live`へ切り替えます。`TRANSLATE_LIVE_PRESET`（`plain`・`plain-q`〔既定〕・`domain-glossary`・`domain-glossary-q`）と`TRANSLATE_LIVE_VOICE`（既定`marin`）は起動時に検証します。GPT-Liveは無音も含む連続音声を100 ms単位で返します。現行と同じく完全無音だけを短縮し（最初の発声前は捨て、以降は200 msまで）、低レベルの非ゼロ音は削らずに配信します。原文字幕（`session.input_transcript.delta`）は止める設定がなく常に届き、relayの現行契約どおり話者本人へsource言語の`caption.delta`として送られます。費用の公示は$0.05/分（translateは$0.034/分）で、予算の正本はホスト側leaseです。確認済みなのはfake transportの自動テストと合成音声1回の実API smokeまでで、2台・イヤフォン・60分の実機受入は未完了です。
+
 この構成の実環境配備、NIHOの接続先変更、2台・イヤフォン・60分の受入は別作業です。sourceの存在やprovider単体の実API試験だけで製品合格とは扱いません。

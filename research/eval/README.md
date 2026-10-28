@@ -12,7 +12,7 @@
 |---|---|---|
 | `src/engine.ts` | エンジン契約・スキーマ（本文書と一体。変更はメイン担当のみ） | main |
 | `src/prompts/` | 通訳指示プリセットと合成用語集（変更はメイン担当のみ） | main |
-| `src/run.ts`, `src/audio.ts`, `src/timeline.ts`, `src/pacing.ts`, `src/engines/openai-translate.ts`, `src/engines/openai-live.ts`, `src/engines/openai-realtime.ts`, `src/engines/index.ts` | ハーネス本体と OpenAI 3 エンジン | agent A |
+| `src/run.ts`, `src/audio.ts`, `src/timeline.ts`, `src/pacing.ts`, `src/engines/openai-translate.ts`, `src/engines/openai-live.ts`, `src/engines/openai-realtime.ts`, `src/engines/gemini-live-translate.ts`, `src/engines/index.ts` | ハーネス本体と OpenAI 3 エンジン＋Gemini Live Translate | agent A |
 | `src/engines/cascade/**` | カスケード型（ASR→区切り→LLM訳→TTS）の試作。`src/engines/cascade/index.ts` が `EngineFactory` を export する | agent B |
 | `src/reference/**` | 正解原稿（時刻付き日本語区間）作成ツール | agent C |
 | `src/judge/**`, `src/aggregate.ts` | 判定器（EN 単語時刻→区間対応→意味採点）と集計 | agent D |
@@ -54,6 +54,7 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 | `openai-live` | `wss://api.openai.com/v1/live/sessions`、`session.start` に `model: gpt-live-1`、`instructions`、`audio.format {audio/pcm, 24000}`。`session.input_audio.append` で送る。`session.output_audio.delta` / `session.output_transcript.delta` / `session.input_transcript.delta` を受ける。終端は `session.close`→`session.closed` | `preset=plain|domain|domain-glossary`（domain）、`voice`（marin） |
 | `openai-realtime` | Realtime API `session.update {type: realtime}`、`output_modalities: ["audio"]`、`audio.input.turn_detection`、`instructions`。`response.output_audio.delta` / `response.output_audio_transcript.delta` を受ける | `model=gpt-realtime-2.1|gpt-realtime-2.1-mini`（2.1）、`vad=semantic:high|semantic:medium|semantic:low|server:<silence_ms>`（semantic:high）、`interrupt=0|1`（0）、`preset`（domain）、`inputTranscription=0|1`（0） |
 | `cascade` | `gpt-live-transcribe`（streaming ASR）→ 日本語の節単位の区切り → LLM 訳（直前文脈つき）→ streaming TTS。agent B の設計書 `src/engines/cascade/README.md` を正とする | B が定義（`asrDelay`, `segmenter`, `llm`, `tts`, `context`, `glossary` など） |
+| `gemini-live-translate` | Vertex AI の Live API `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`（`global`）。`setup` に `model: projects/<project>/locations/global/publishers/google/models/gemini-3.5-live-translate-preview`、`generationConfig.translationConfig.targetLanguageCode`、`inputAudioTranscription` / `outputAudioTranscription`（setup 直下）。音声は 16 kHz に間引いて `realtimeInput.audio`、終端は `realtimeInput.audioStreamEnd`。`serverContent.modelTurn.parts[].inlineData`（24 kHz）と `outputTranscription` / `inputTranscription` を受ける。通訳専用モデルで instructions・voice は無い。認証は `GOOGLE_ACCESS_TOKEN`（`gcloud auth print-access-token`） | `project`（既定 `GOOGLE_CLOUD_PROJECT`）、`location`（global）、`echo=true|false`（false） |
 
 通訳指示は `src/prompts/interpreter.ts` の `buildInterpreterInstructions(preset, source, target)`。用語集は `src/prompts/glossary.ts`（合成・公開情報のみ）。cascade も同じ用語集を ASR keywords と LLM prompt に使う。
 
@@ -87,6 +88,9 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 export EVAL_PRIVATE_DIR=/path/to/private/eval
 export OPENAI_API_KEY="$(gcloud secrets versions access latest --secret=AI_OPERATIONS_OPENAI_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
 export ANTHROPIC_API_KEY="$(gcloud secrets versions access latest --secret=NIHO_TRANSLATE_ANTHROPIC_API_KEY --project=niho-app-stg --account=takahama.t@niho.life --quiet)"
+# gemini-live-translate だけ（Vertex AI。トークンは 1 時間で切れる）
+export GOOGLE_ACCESS_TOKEN="$(gcloud auth print-access-token --account=takahama.t@niho.life)"
+export GOOGLE_CLOUD_PROJECT=niho-app-stg
 npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-translate --frame-ms 200
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json"
 # 既定の判定器は Claude（ANTHROPIC_API_KEY）。gpt-5.4 で判定するなら --judge-backend openai。--skip-asr で既存の output-words.json を再利用する
@@ -98,7 +102,7 @@ npm --silent run eval:aggregate -- --runs "$EVAL_PRIVATE_DIR"/runs/*
 
 ## 8. 共通の禁止事項
 
-- 鍵を引数・ファイル・ログ・エラーメッセージに出さない。`OPENAI_API_KEY`・`ANTHROPIC_API_KEY` は環境変数からだけ読む。
+- 鍵を引数・ファイル・ログ・エラーメッセージに出さない。`OPENAI_API_KEY`・`ANTHROPIC_API_KEY`・`GOOGLE_ACCESS_TOKEN` は環境変数からだけ読む。
 - 原文・訳文・音声・実データの path を `research/**`、tests、CI、stdout に出さない（stdout は集計 JSON のみ）。
 - `packages/**`、`ios/**`、`examples/**`、`scripts/**` を変更しない（製品経路の比較対象を固定するため）。
 - 他担当の path を編集しない。`engine.ts`・`prompts/**`・本 README の変更が必要なら、変更内容をメイン担当へ報告して止まる。

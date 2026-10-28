@@ -57,6 +57,13 @@ describe("parseJudgeArgs with --judge-backend anthropic", () => {
     expect(() => parseJudgeArgs([...base, "--effort", "minimal"])).toThrow(/--effort/);
   });
 
+  it("is the default backend when --judge-backend is omitted (gpt-5.4 stays available as openai)", () => {
+    expect(parseJudgeArgs(["--run", "/tmp/run", "--reference", "/tmp/ref.json"]).backend).toBe("anthropic");
+    const openai = parseJudgeArgs(["--run", "/tmp/run", "--reference", "/tmp/ref.json", "--judge-backend", "openai"]);
+    expect(openai.model).toBe("gpt-5.4");
+    expect(openai.effort).toBe("medium");
+  });
+
   it("rejects an unknown backend", () => {
     expect(() => parseJudgeArgs(["--run", "/tmp/run", "--reference", "/tmp/ref.json", "--judge-backend", "gemini"])).toThrow(/--judge-backend/);
   });

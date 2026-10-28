@@ -2,7 +2,7 @@
  * 正解原稿（時刻付き日本語区間）を作る CLI。
  *
  *   npm --silent run eval:reference -- --wav <abs.wav> --window <startSec>:<endSec> --source-id <id> \
- *     [--turn-transcript <abs.md>] [--out <abs.json>] [--llm gpt-5.4 | anthropic:claude-opus-5-5] [--reasoning medium] \
+ *     [--turn-transcript <abs.md>] [--out <abs.json>] [--llm anthropic:claude-opus-5-5 | gpt-5.4] [--reasoning medium] \
  *     [--whisper-cli-model <abs.bin>] [--draft <abs.json>] [--refresh-asr] [--refresh-llm] [--no-vad-trim]
  *
  * 中間物（切り出した WAV、ASR 応答、LLM 下書き）は $EVAL_PRIVATE_DIR/work/agentC/<sourceId>/ に置き、

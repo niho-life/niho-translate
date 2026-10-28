@@ -4,7 +4,7 @@
  *   [--batch 15（agy は 8）] [--prompt-version v1] [--effort medium] [--out-name judgement.json]
  * --model の既定は openai なら gpt-5.4、agy なら claude-opus-4-6-thinking、anthropic なら claude-opus-5-5
  *（judge.model は "agy:<id>" / "anthropic:<id>"）。anthropic は Anthropic API を直接呼ぶ第二審判（鍵は ANTHROPIC_API_KEY）。
- * --effort の既定は openai medium / anthropic high / agy なし。
+ * --effort の既定は openai medium / anthropic high / agy なし。--judge-backend の既定は anthropic（2026-10-28 から。gpt-5.4 は openai で第二審判）。
  * 出力: runDir/output-words.json と、--out-name（既定 judgement.json）・対応する report*.md（いずれも private）。
  * stdout は JudgeAggregate の JSON だけ。本文・path・鍵を出さない。
  */
@@ -80,7 +80,7 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   const referencePath = values.get("--reference");
   if (!runDir) throw new Error("--run <runDir> is required");
   if (!referencePath || !isAbsolute(referencePath)) throw new Error("--reference <absolute json path> is required");
-  const backend = values.get("--judge-backend") ?? "openai";
+  const backend = values.get("--judge-backend") ?? "anthropic";
   if (backend !== "openai" && backend !== "agy" && backend !== "anthropic") throw new Error("--judge-backend must be openai, agy or anthropic");
   // agy は 1 回の応答が長いと時間上限に掛かるので、既定の区間数を小さくする
   const batch = Number(values.get("--batch") ?? (backend === "agy" ? "8" : "15"));

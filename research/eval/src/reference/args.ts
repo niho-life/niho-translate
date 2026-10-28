@@ -74,7 +74,7 @@ export function parseMakeReferenceArgs(argv: readonly string[]): MakeReferenceAr
   if (wav === undefined || window === undefined || sourceId === undefined) throw new Error("--wav, --window and --source-id are required");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sourceId)) throw new Error("--source-id must be [A-Za-z0-9._-] (max 64)");
   const { startSec, endSec } = parseWindow(window);
-  const llm = values.get("--llm") ?? "gpt-5.4";
+  const llm = values.get("--llm") ?? "anthropic:claude-opus-5-5";
   if (!/^[A-Za-z0-9._:-]{1,64}$/.test(llm)) throw new Error("--llm must be a model id");
   const reasoning = (values.get("--reasoning") ?? "medium") as ReasoningEffort;
   if (!EFFORTS.includes(reasoning)) throw new Error(`--reasoning must be one of ${EFFORTS.join("|")}`);

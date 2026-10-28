@@ -67,6 +67,7 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 - 本文は ASR 出力を、録音に付属する既存の文字起こし（オーナー提供・人手未校正）と照合して直す。3 系統が食い違う箇所は `uncertain: true`。
 - `facts` は数・期間・金額・時刻・否定・地名（`place`）・その他の固有名詞（`proper_noun`）・条件・主体・時制を、原文の表記で列挙する（判定器が各 fact の保存を採点する）。地名は人名・社名と分け、`place` にする。
 - 原稿作成に LLM（gpt-5.4 系）を使ってよいが、本文を公開物へ出さない。
+- 第 4 系統 D は `--turn-transcript <abs.md>`（`[hh:mm:ss] 話者N: 本文`、window の前後を含んでよい。本文一致で window 内を抜き出す）。既定は録音付属の人手未校正転記。`--transcript-kind gemini` を付けると Gemini（Vertex AI）の文字起こしとして扱い、A〜C の 2 系統以上が一致する場合を除き D の語を優先する（whisper 系の聞き違いを別系統で正すため）。
 
 ## 6. 判定（agent D、run ディレクトリ内に `output-words.json`, `judgement.json`, `report.md`）
 

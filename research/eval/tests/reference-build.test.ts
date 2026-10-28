@@ -31,6 +31,7 @@ describe("make-reference arguments", () => {
       windowStartSec: 150,
       windowEndSec: 450,
       sourceId: "src1-w1",
+      transcriptKind: "human",
       llm: "gpt-5.4",
       reasoning: "medium",
       refreshAsr: false,
@@ -45,11 +46,11 @@ describe("make-reference arguments", () => {
   it("accepts the optional absolute paths and flags", () => {
     const args = parseMakeReferenceArgs([
       "--wav", "/private/a.wav", "--window", "0:30.5", "--source-id", "x.1",
-      "--turn-transcript", "/private/t.md", "--out", "/private/o.json", "--llm", "gpt-5.4-mini",
+      "--turn-transcript", "/private/t.md", "--transcript-kind", "gemini", "--out", "/private/o.json", "--llm", "gpt-5.4-mini",
       "--whisper-cli-model", "/private/m.bin", "--draft", "/private/d.json", "--reasoning", "high",
       "--refresh-asr", "--refresh-llm", "--no-vad-trim", "--no-facts-pass", "--facts-llm", "gpt-5.4-mini", "--facts-reasoning", "medium",
     ]);
-    expect(args).toMatchObject({ windowEndSec: 30.5, turnTranscript: "/private/t.md", out: "/private/o.json", whisperCliModel: "/private/m.bin", draft: "/private/d.json", reasoning: "high", refreshAsr: true, refreshLlm: true, vadTrim: false, factsPass: false, factsLlm: "gpt-5.4-mini", factsReasoning: "medium" });
+    expect(args).toMatchObject({ windowEndSec: 30.5, turnTranscript: "/private/t.md", transcriptKind: "gemini", out: "/private/o.json", whisperCliModel: "/private/m.bin", draft: "/private/d.json", reasoning: "high", refreshAsr: true, refreshLlm: true, vadTrim: false, factsPass: false, factsLlm: "gpt-5.4-mini", factsReasoning: "medium" });
   });
 
   it("rejects relative paths, bad windows, ids and unknown options", () => {
@@ -63,6 +64,7 @@ describe("make-reference arguments", () => {
       ["--wav", "/a.wav", "--window", "150:450", "--source-id", "../x"],
       ["--wav", "/a.wav", ...base, "--turn-transcript", "/t.txt"],
       ["--wav", "/a.wav", ...base, "--reasoning", "max"],
+      ["--wav", "/a.wav", ...base, "--transcript-kind", "human2"],
       ["--wav", "/a.wav", ...base, "--unknown"],
       ["--wav", "/a.wav", ...base, "--out"],
       ["--wav", "/a.wav", ...base, "--refresh-asr", "--refresh-asr"],
@@ -130,6 +132,17 @@ describe("draft prompt and parsing", () => {
       { text: "10分", startMs: 2000, endMs: 2400 },
     ];
     expect(formatWhisperWords(ws)).toBe("[0.0–1.3] 駅から｜歩いて\n[2.0–2.4] 10分");
+  });
+
+  it("describes D as a Gemini transcript only when transcriptKind is gemini", () => {
+    const excerpt = { utterances: [{ index: 0, line: 1, timeSec: 0, speaker: "話者1", text: "テスト", bundled: false, clippedHead: false, clippedTail: false }], candidates: 1, bundledIncluded: 0, coverage: 1 } as never;
+    const base = { durationMs: 30_000, whisperWords: [], diarized: [], whisperCpp: null, transcript: excerpt, speakerLabels: ["話者1"] };
+    const human = String(buildDraftRequest(base, "gpt-5.4", "medium")["instructions"]);
+    const gemini = String(buildDraftRequest({ ...base, transcriptKind: "gemini" }, "gpt-5.4", "medium")["instructions"]);
+    expect(human).toContain("人手未校正");
+    expect(human).not.toContain("Gemini");
+    expect(gemini).toContain("Gemini");
+    expect(gemini).not.toContain("人手未校正");
   });
 
   it("asks for structured output without any time fields and with the speaker labels as an enum", () => {

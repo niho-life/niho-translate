@@ -5,9 +5,11 @@
 import type { FactType, ReferenceSegment } from "../engine.ts";
 import type { TimedUnit } from "./align.ts";
 import type { TranscriptExcerpt } from "./transcript.ts";
+import type { TranscriptKind } from "./args.ts";
 import { FACT_TYPES, SEGMENT_KINDS } from "./validate.ts";
 
-export const PROMPT_VERSION = "reference-draft-v3";
+/** v4: D（転記）の種類で説明を切り替える（human = 人手未校正の転記、gemini = Gemini の文字起こし）。 */
+export const PROMPT_VERSION = "reference-draft-v4";
 
 export type SourceKey = "A" | "B" | "C" | "D";
 export const SOURCE_KEYS: readonly SourceKey[] = ["A", "B", "C", "D"];
@@ -71,6 +73,8 @@ export interface DraftInput {
   readonly diarized: readonly TimedUnit[] | null;
   readonly whisperCpp: readonly TimedUnit[] | null;
   readonly transcript: TranscriptExcerpt | null;
+  /** D の種類。省略時は human。 */
+  readonly transcriptKind?: TranscriptKind;
   readonly speakerLabels: readonly string[];
 }
 
@@ -118,14 +122,16 @@ export function formatTranscriptExcerpt(excerpt: TranscriptExcerpt): string {
     .join("\n");
 }
 
-export function buildInstructions(durationMs: number, speakerLabels: readonly string[], hasTranscript: boolean, hasWhisperCpp: boolean): string {
+export function buildInstructions(durationMs: number, speakerLabels: readonly string[], hasTranscript: boolean, hasWhisperCpp: boolean, transcriptKind: TranscriptKind = "human"): string {
   const sources = [
     "- A: whisper-1。行頭の [開始–終了] は window 先頭からの秒。行内の「｜」は 0.3 秒以上の無音。",
     "- B: gpt-4o-transcribe-diarize。[開始–終了 話者] ごとの区間。話者ラベル（A/B…）は B の中だけで一貫。",
     hasWhisperCpp ? "- C: whisper.cpp large-v3-turbo。[開始–終了] ごとの区間。" : "- C: なし。",
-    hasTranscript
-      ? "- D: 録音に付属する発話転記（人手未校正。聞き違い・区切り・話者・固有名詞の誤りがあり得る。時刻は無く、window の前後に少しはみ出している。…は途中で切ったしるし）。"
-      : "- D: なし。",
+    !hasTranscript
+      ? "- D: なし。"
+      : transcriptKind === "gemini"
+        ? "- D: Gemini（Vertex AI）による文字起こし（A〜C とは別系統の ASR。日本語の語・助詞・固有名詞の聞き取りは A〜C より正確なことが多いが、聞き違い・区切り・話者の誤りはあり得る。話者ラベル（話者1/2…）は D の中だけで一貫。時刻は無く、window の前後に少しはみ出している。…は途中で切ったしるし）。A〜C と D で語が食い違うときは、A〜C の 2 系統以上が同じ語で一致して D だけ違う場合を除き、D の語を採る。"
+        : "- D: 録音に付属する発話転記（人手未校正。聞き違い・区切り・話者・固有名詞の誤りがあり得る。時刻は無く、window の前後に少しはみ出している。…は途中で切ったしるし）。",
   ].join("\n");
   return `あなたは日本語音声の書き起こしを校正する担当です。同時通訳の評価に使う「正解原稿」を作ります。
 入力は同じ音声区間（window、長さ ${sec(durationMs)} 秒）に対する複数の文字起こしです。
@@ -190,7 +196,7 @@ export function buildUserContent(input: DraftInput): string {
     `# A. whisper-1\n${formatWhisperWords(input.whisperWords)}`,
     `# B. gpt-4o-transcribe-diarize\n${input.diarized !== null ? formatTimedSegments(input.diarized) : "（なし）"}`,
     `# C. whisper.cpp\n${input.whisperCpp !== null ? formatTimedSegments(input.whisperCpp) : "（なし）"}`,
-    `# D. 発話転記\n${input.transcript !== null && input.transcript.utterances.length > 0 ? formatTranscriptExcerpt(input.transcript) : "（なし）"}`,
+    `# D. ${(input.transcriptKind ?? "human") === "gemini" ? "Gemini 文字起こし" : "発話転記"}\n${input.transcript !== null && input.transcript.utterances.length > 0 ? formatTranscriptExcerpt(input.transcript) : "（なし）"}`,
   ];
   return parts.join("\n\n");
 }
@@ -252,7 +258,7 @@ export function buildDraftRequest(input: DraftInput, model: string, reasoningEff
     store: false,
     reasoning: { effort: reasoningEffort },
     max_output_tokens: 48_000,
-    instructions: buildInstructions(input.durationMs, input.speakerLabels, input.transcript !== null && input.transcript.utterances.length > 0, input.whisperCpp !== null),
+    instructions: buildInstructions(input.durationMs, input.speakerLabels, input.transcript !== null && input.transcript.utterances.length > 0, input.whisperCpp !== null, input.transcriptKind ?? "human"),
     input: [{ role: "user", content: [{ type: "input_text", text: buildUserContent(input) }] }],
     text: { format: { type: "json_schema", name: "reference_segments", strict: true, schema: draftSchema(input.speakerLabels) } },
   };

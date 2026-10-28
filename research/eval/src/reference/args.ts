@@ -4,12 +4,17 @@ import { isAbsolute } from "node:path";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 const EFFORTS: readonly ReasoningEffort[] = ["none", "low", "medium", "high", "xhigh"];
 
+/** `--turn-transcript` の種類。human = 録音付属の人手（未校正）転記、gemini = Gemini（Vertex AI）の文字起こし（同じ `[hh:mm:ss] 話者N: 本文` 形式）。 */
+export type TranscriptKind = "human" | "gemini";
+const TRANSCRIPT_KINDS: readonly TranscriptKind[] = ["human", "gemini"];
+
 export interface MakeReferenceArgs {
   readonly wav: string;
   readonly windowStartSec: number;
   readonly windowEndSec: number;
   readonly sourceId: string;
   readonly turnTranscript?: string;
+  readonly transcriptKind: TranscriptKind;
   readonly out?: string;
   readonly llm: string;
   readonly reasoning: ReasoningEffort;
@@ -47,7 +52,7 @@ function absolutePath(flag: string, value: string, extension: string): string {
 export function parseMakeReferenceArgs(argv: readonly string[]): MakeReferenceArgs {
   const values = new Map<string, string>();
   const flags = new Set<string>();
-  const withValue = new Set(["--wav", "--window", "--source-id", "--turn-transcript", "--out", "--llm", "--reasoning", "--whisper-cli-model", "--draft", "--facts-llm", "--facts-reasoning"]);
+  const withValue = new Set(["--wav", "--window", "--source-id", "--turn-transcript", "--transcript-kind", "--out", "--llm", "--reasoning", "--whisper-cli-model", "--draft", "--facts-llm", "--facts-reasoning"]);
   const booleans = new Set(["--refresh-asr", "--refresh-llm", "--no-vad-trim", "--no-facts-pass"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -77,11 +82,14 @@ export function parseMakeReferenceArgs(argv: readonly string[]): MakeReferenceAr
   if (!/^[A-Za-z0-9._:-]{1,64}$/.test(factsLlm)) throw new Error("--facts-llm must be a model id");
   const factsReasoning = (values.get("--facts-reasoning") ?? "low") as ReasoningEffort;
   if (!EFFORTS.includes(factsReasoning)) throw new Error(`--facts-reasoning must be one of ${EFFORTS.join("|")}`);
+  const transcriptKind = (values.get("--transcript-kind") ?? "human") as TranscriptKind;
+  if (!TRANSCRIPT_KINDS.includes(transcriptKind)) throw new Error(`--transcript-kind must be one of ${TRANSCRIPT_KINDS.join("|")}`);
   const out: MakeReferenceArgs = {
     wav: absolutePath("--wav", wav, ".wav"),
     windowStartSec: startSec,
     windowEndSec: endSec,
     sourceId,
+    transcriptKind,
     llm,
     reasoning,
     refreshAsr: flags.has("--refresh-asr"),

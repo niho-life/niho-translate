@@ -227,7 +227,7 @@ async function main(args: MakeReferenceArgs): Promise<void> {
     };
     llmCached = true;
   } else {
-    const draftInput: DraftInput = { durationMs: Math.round(windowSec * 1000), whisperWords: whisper.words, diarized, whisperCpp, transcript: excerpt, speakerLabels };
+    const draftInput: DraftInput = { durationMs: Math.round(windowSec * 1000), whisperWords: whisper.words, diarized, whisperCpp, transcript: excerpt, transcriptKind: args.transcriptKind, speakerLabels };
     const request = buildDraftRequest(draftInput, args.llm, args.reasoning);
     const inputSha = sha256(JSON.stringify(request));
     const draftPath = join(workDir, "draft.json");
@@ -289,7 +289,7 @@ async function main(args: MakeReferenceArgs): Promise<void> {
   const transcriptUnits = excerpt !== null && excerpt.utterances.length > 0 ? excerpt.utterances.map(u => ({ text: u.text, startMs: 0, endMs: 0, speaker: u.speaker })) : null;
   const asrLabel = `whisper-1 (verbose_json word+segment, ja) for timing; gpt-4o-transcribe-diarize (diarized_json) for speakers${whisperCpp !== null ? "; whisper.cpp large-v3-turbo as third check" : ""}`;
   const proofread = [
-    `${draft.model} (${draft.promptVersion}) collation of the ASR outputs${transcriptUnits !== null ? " and the unproofread turn transcript" : ""}`,
+    `${draft.model} (${draft.promptVersion}) collation of the ASR outputs${transcriptUnits !== null ? (args.transcriptKind === "gemini" ? " and a Gemini (Vertex AI) transcript (D)" : " and the unproofread turn transcript") : ""}`,
     ...(args.factsPass ? [`facts completed by ${args.factsLlm} (${FACTS_PROMPT_VERSION}) from the final text and merged with the draft facts`] : []),
     "deterministic word-time alignment (normalized exact match, LCS fallback)",
     ...(draft.editedBy !== undefined ? [`edited by ${draft.editedBy}`] : []),
@@ -312,14 +312,15 @@ async function main(args: MakeReferenceArgs): Promise<void> {
     },
   });
   const stats = referenceStats(result.doc);
+  const dLabel = args.transcriptKind === "gemini" ? "Gemini" : "転記";
   await writePrivate(outPath, `${JSON.stringify(result.doc, null, 2)}\n`);
   await writePrivate(
     reviewPath,
     renderReview(result, stats, {
-      sourceLabels: { A: "whisper-1", B: "diarize", C: "whisper.cpp", D: "転記" },
+      sourceLabels: { A: "whisper-1", B: "diarize", C: "whisper.cpp", D: dLabel },
       sourceSummary: [
         `系統: A whisper-1 語 ${whisper.words.length}・B diarize 区間 ${diarized.length}（話者 ${new Set(diarized.map(d => d.speaker)).size}）・C whisper.cpp 区間 ${whisperCpp?.length ?? "-"}`,
-        excerpt !== null ? `D 転記: 発話 ${excerpt.utterances.length}/${excerpt.candidates} 候補・ASR 一致 ${excerpt.coverage.toFixed(2)}・時刻の壊れた束から ${excerpt.bundledIncluded}` : "D 転記: なし",
+        excerpt !== null ? `D ${dLabel}: 発話 ${excerpt.utterances.length}/${excerpt.candidates} 候補・ASR 一致 ${excerpt.coverage.toFixed(2)}・時刻の壊れた束から ${excerpt.bundledIncluded}` : `D ${dLabel}: なし`,
       ],
       draftLabel: `${draft.model} / ${draft.promptVersion}${draft.editedBy !== undefined ? ` / 編集 ${draft.editedBy}` : ""}`,
     }),

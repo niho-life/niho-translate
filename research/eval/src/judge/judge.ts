@@ -1,7 +1,7 @@
 /**
  * 判定 CLI（agent D）。
  *   --run <runDir> --reference <abs json> [--judge-backend openai|agy] [--model <id>] [--skip-asr]
- *   [--batch 15] [--prompt-version v1] [--effort medium] [--out-name judgement.json]
+ *   [--batch 15（agy は 8）] [--prompt-version v1] [--effort medium] [--out-name judgement.json]
  * --model の既定は openai なら gpt-5.4、agy なら claude-opus-4-6-thinking（judge.model は "agy:<id>"）。
  * 出力: runDir/output-words.json と、--out-name（既定 judgement.json）・対応する report*.md（いずれも private）。
  * stdout は JudgeAggregate の JSON だけ。本文・path・鍵を出さない。
@@ -9,7 +9,7 @@
 import { isAbsolute, join, resolve } from "node:path";
 import type { JudgeDocument, JudgedSegment, ReferenceSegment } from "../engine.ts";
 import { isCurrentOutputWords, parseOutputWords, transcribeTimeline } from "./asr.ts";
-import { AGY_DEFAULT_MODEL, AGY_EFFORTS, agyPrompt, runAgy } from "./agy.ts";
+import { AGY_DEFAULT_MODEL, AGY_EFFORTS, agyPrompt, isAgyQuotaError, runAgy, type AgySchemaMode } from "./agy.ts";
 import { outputNames, parseReference, readBytes, readJson, readJsonIfExists, readRunMeta, readTextIfExists, writeText, type RunMeta } from "./files.ts";
 import { computeAggregate, resolveSegment } from "./metrics.ts";
 import { createJsonResponse, redactSecrets, supportsReasoning, type Usage } from "./openai.ts";
@@ -18,6 +18,7 @@ import {
   DEFAULT_PROMPT_VERSION,
   judgeInstructions,
   planBatches,
+  portableResponseSchema,
   responseSchema,
   validateBatchResponse,
   WINDOW_AFTER_MS,
@@ -43,6 +44,8 @@ export interface JudgeArgs {
   readonly promptVersion: string;
   /** openai は既定 medium。agy はモデルごとに対応が違うので、明示したときだけ渡す（null = 渡さない）。 */
   readonly effort: string | null;
+  /** agy の出力の形の強制方法（prompt = schema を prompt に書いて 1 回で答えさせる）。 */
+  readonly agySchema: AgySchemaMode;
 }
 
 const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
@@ -61,7 +64,7 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
       skipAsr = true;
       continue;
     }
-    if (!flag || !["--run", "--reference", "--judge-backend", "--model", "--batch", "--prompt-version", "--effort", "--out-name"].includes(flag)) {
+    if (!flag || !["--run", "--reference", "--judge-backend", "--model", "--batch", "--prompt-version", "--effort", "--out-name", "--agy-schema"].includes(flag)) {
       throw new Error(`unknown argument: ${flag ?? ""}`);
     }
     const value = argv[k + 1];
@@ -74,15 +77,19 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   const referencePath = values.get("--reference");
   if (!runDir) throw new Error("--run <runDir> is required");
   if (!referencePath || !isAbsolute(referencePath)) throw new Error("--reference <absolute json path> is required");
-  const batch = Number(values.get("--batch") ?? "15");
-  if (!Number.isInteger(batch) || batch < 1 || batch > 50) throw new Error("--batch must be an integer in 1..50");
   const backend = values.get("--judge-backend") ?? "openai";
   if (backend !== "openai" && backend !== "agy") throw new Error("--judge-backend must be openai or agy");
+  // agy は 1 回の応答が長いと時間上限に掛かるので、既定の区間数を小さくする
+  const batch = Number(values.get("--batch") ?? (backend === "agy" ? "8" : "15"));
+  if (!Number.isInteger(batch) || batch < 1 || batch > 50) throw new Error("--batch must be an integer in 1..50");
   const effort = values.get("--effort") ?? (backend === "agy" ? null : "medium");
   const allowed = backend === "agy" ? AGY_EFFORTS : EFFORTS;
   if (effort !== null && !allowed.has(effort)) throw new Error(`--effort must be one of ${[...allowed].join(", ")} for ${backend}`);
   const outName = values.get("--out-name") ?? "judgement.json";
   outputNames(outName);
+  // enforce が既定: prompt モードは 1 回で済むが、実測で壊れた JSON を返した
+  const agySchema = values.get("--agy-schema") ?? "enforce";
+  if (agySchema !== "prompt" && agySchema !== "enforce") throw new Error("--agy-schema must be prompt or enforce");
   return {
     runDir: resolve(runDir),
     referencePath,
@@ -93,6 +100,7 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
     batch,
     promptVersion: values.get("--prompt-version") ?? DEFAULT_PROMPT_VERSION,
     effort,
+    agySchema,
   };
 }
 
@@ -152,8 +160,9 @@ async function callJudge(
   if (ctx.args.backend === "agy") {
     return runAgy({
       model: ctx.args.model,
-      prompt: agyPrompt(ctx.instructions, input),
+      prompt: agyPrompt(ctx.instructions, input, ctx.args.agySchema === "prompt" ? schema : undefined),
       schema,
+      schemaMode: ctx.args.agySchema,
       ...(ctx.args.effort ? { effort: ctx.args.effort } : {}),
     });
   }
@@ -178,7 +187,8 @@ async function judgeBatch(
     return { judgements: new Map(plan.targets.map((s) => [s.id, noWordsJudgement(s)])), calls: 0, usage: zero, seconds: [] };
   }
   const baseInput = buildBatchInput(plan, ctx.words, ctx.sentences);
-  const schema = responseSchema(plan.targets.map((s) => s.id));
+  const ids = plan.targets.map((s) => s.id);
+  const schema = ctx.args.backend === "agy" ? portableResponseSchema(ids) : responseSchema(ids);
   let input = baseInput;
   let usage = zero;
   const seconds: number[] = [];
@@ -198,7 +208,8 @@ async function judgeBatch(
       log(`judge: batch ${plan.index + 1} has ${problems.length} problem(s), retrying`);
       input = `${baseInput}\n\nYour previous answer had these problems. Fix them and answer again:\n- ${problems.join("\n- ")}`;
     } catch (error) {
-      if (attempt === 2) throw error;
+      // 利用上限は再試行しても通らない
+      if (attempt === 2 || isAgyQuotaError(error instanceof Error ? error.message : String(error))) throw error;
       log(`judge: batch ${plan.index + 1} failed (${redactSecrets(error instanceof Error ? error.message : String(error))}), retrying`);
     }
   }

@@ -198,12 +198,28 @@ export function responseSchema(targetIds: ReadonlyArray<string>): Record<string,
   };
 }
 
+/**
+ * agy 用の schema。Gemini の関数宣言は整数の enum と type の配列（["integer","null"]）を受け付けない
+ * （INVALID_ARGUMENT）ので、meaning は整数（0〜3 はコードで丸める）、語 index は整数で「無し」は -1 にする。
+ */
+export function portableResponseSchema(targetIds: ReadonlyArray<string>): Record<string, unknown> {
+  const schema = responseSchema(targetIds) as {
+    properties: { segments: { items: { properties: Record<string, unknown> } } };
+  };
+  const item = schema.properties.segments.items.properties;
+  item.meaning = { type: "integer", description: "0, 1, 2 or 3" };
+  item.enStartWordIdx = { type: "integer", description: "word index, or -1 when not aligned" };
+  item.enEndWordIdx = { type: "integer", description: "word index, or -1 when not aligned" };
+  return schema as unknown as Record<string, unknown>;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 負の値（agy 用 schema の -1）は「無し」。 */
 function indexOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 /**

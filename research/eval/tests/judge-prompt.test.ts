@@ -4,6 +4,7 @@ import {
   buildBatchInput,
   judgeInstructions,
   planBatches,
+  portableResponseSchema,
   responseSchema,
   validateBatchResponse,
 } from "../src/judge/prompt.ts";
@@ -101,6 +102,25 @@ describe("responseSchema", () => {
   });
 });
 
+describe("portableResponseSchema", () => {
+  it("has no integer enums and no type arrays (Gemini rejects both), but keeps string enums", () => {
+    const visit = (node: unknown): void => {
+      if (typeof node !== "object" || node === null) return;
+      const obj = node as Record<string, unknown>;
+      expect(Array.isArray(obj.type)).toBe(false);
+      if (Array.isArray(obj.enum)) expect(obj.enum.every((v) => typeof v === "string")).toBe(true);
+      for (const child of Object.values(obj)) visit(child);
+    };
+    const schema = portableResponseSchema(["s1", "s2"]);
+    visit(schema);
+    const item = (schema.properties as any).segments.items.properties;
+    expect(item.id.enum).toEqual(["s1", "s2"]);
+    expect(item.meaning).toEqual({ type: "integer", description: "0, 1, 2 or 3" });
+    // the OpenAI schema is unchanged
+    expect((responseSchema(["s1"]).properties as any).segments.items.properties.meaning.enum).toEqual([0, 1, 2, 3]);
+  });
+});
+
 describe("validateBatchResponse", () => {
   const plan = planBatches(segments, words, { batchSize: 4 })[1]!;
   const ok = (id: string, start: number | null, end: number | null) => ({
@@ -144,6 +164,13 @@ describe("validateBatchResponse", () => {
     expect(problems.join("\n")).toMatch(/s5: verdicts missing/);
     expect(problems.join("\n")).toMatch(/s6 is missing/);
     expect(problems.join("\n")).toMatch(/s7 is missing/);
+  });
+
+  it("reads -1 word indices (agy schema) as none", () => {
+    const unaligned = { ...ok("s4", null, null), enStartWordIdx: -1, enEndWordIdx: -1 };
+    const { judgements, problems } = validateBatchResponse({ segments: [unaligned, ok("s5", 50, 55), ok("s6", 60, 61), ok("s7", 70, 75)] }, plan);
+    expect(judgements.get("s4")).toMatchObject({ aligned: false, enStartWordIdx: null, enEndWordIdx: null });
+    expect(problems).toEqual([]);
   });
 
   it("rejects a response without segments", () => {

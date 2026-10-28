@@ -100,7 +100,7 @@ A 100 ms の重大誤り 2 件は、1 run で 2 分間の音声・字幕不一�
 
 ### 8.2 判定器の確認
 
-- 判定モデルを OpenAI 以外（Antigravity 経由の Claude）でも動かせるようにした（`--judge-backend agy`）。合成 6 区間では gpt-5.4 と全区間一致。実 run での一致は §8.4。
+- 判定モデルを OpenAI 以外（Antigravity 経由の Claude / Gemini）でも動かせるようにした（`--judge-backend agy`）。合成 6 区間では gpt-5.4 と全区間一致。実 run（A の w1、44 区間）を `gemini-3.8-flash-high` で判定した結果は gpt-5.4 と意味平均 2.35 vs 2.30、区間ごとの意味が一致 33/44（±1 以内 42/44）、開始語が同一 35/43、重大誤り 1 vs 3。OpenAI の判定器が OpenAI のエンジンを甘く採点している兆候はない（Gemini の方がわずかに高い）。Claude での判定は Antigravity の利用枠が尽きて未完（約 1 週間で回復）。1 run の判定に約 17 分かかる。
 - 正解原稿の本文は whisper-1・gpt-4o-transcribe-diarize・whisper.cpp と録音付属転記の 4 系統を gpt-5.4 が照合したもの。Gemini での文字起こしは、Antigravity CLI が音声ファイルを読む手段を持たず、Vertex AI も未有効化のため未実施。
 
 ### 8.3 決定と実装

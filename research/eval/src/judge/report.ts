@@ -16,6 +16,8 @@ export interface ReportContext {
   readonly windowAfterMs: number;
   readonly batches: number;
   readonly llmCalls: number;
+  /** 判定の呼び出しごとの所要時間（秒）。 */
+  readonly callSeconds: ReadonlyArray<number>;
   readonly usage: Usage;
   readonly generatedAtIso: string;
 }
@@ -66,6 +68,13 @@ function uncoveredRuns(ctx: ReportContext): Array<{ startMs: number; text: strin
   }
   flush();
   return runs;
+}
+
+function secondsSummary(xs: ReadonlyArray<number>): string {
+  if (xs.length === 0) return "—";
+  const sorted = [...xs].sort((a, b) => a - b);
+  const median = sorted[Math.ceil(sorted.length / 2) - 1] ?? 0;
+  return `中央値 ${median} s / 最大 ${sorted.at(-1) ?? 0} s（${xs.length} 回）`;
 }
 
 export function renderReport(ctx: ReportContext): string {
@@ -158,8 +167,10 @@ export function renderReport(ctx: ReportContext): string {
     "- lStart = 対応する英語の最初の語の開始 − 原文区間の開始、lEnd = 同 − 原文区間の終了（負なら話し終わる前に訳が始まった）、lTail = 対応する英語の最後の語の終了 − 原文区間の終了。",
     `- 英語の時刻は ${doc.judge.asr} の単語時刻（output-timeline.wav のファイル内時刻 = t、理想再生モデル上の再生位置）。長い音声を 1 回で読ませると whisper が無音や崩れた窓のあとで無関係な文を出し続けるため、エネルギーで有声区間（閾値 ${ctx.words.thresholdDb ?? "—"} dBFS、間 1.5 s 未満は結合、25 s 超は最小エネルギー点で分割、前後 0.3 s の余白）に分け、区間ごとに呼んだ（${ctx.words.regions.length} 区間、送信 ${sec(ctx.words.sentMs, 1)} s / 元 ${sec(ctx.words.audioMs, 1)} s）。${ctx.words.asr.prompt === "engine-transcript" ? "prompt には区間の開始 −3 s（＋最大 queue）〜終了 +1 s に届いたエンジン字幕から、数字・略語・固有名詞だけを語の一覧で渡した（同じ綴りを使わせるため。字幕の文そのものを渡すと whisper が同じ内容を読み飛ばした）。" : "エンジン字幕が無いため prompt なし。"}語の時刻は区間の開始を足して t に戻した。完全無音の上に置かれた ${ctx.words.droppedSilentWords} 語を幻聴として除き、語頭・語尾が無音にかかる語は音のある位置へ寄せた（whisper は休止の後の最初の語を早めに置く傾向がある）。`,
     `- LLM には ${ctx.batches} 組（呼び出し ${ctx.llmCalls} 回）に分け、対象区間の開始 −${sec(ctx.windowBeforeMs, 0)} s〜終了 +${sec(ctx.windowAfterMs, 0)} s に始まる英単語と前後 3 区間の文脈を渡した。これより遅れた訳は未対応になる。時刻は LLM に出させず、選ばせた語 index から引いた。`,
-    `- token: input ${ctx.usage.inputTokens} / output ${ctx.usage.outputTokens}（うち reasoning ${ctx.usage.reasoningTokens}）。`,
-    `- 判定器（${doc.judge.model}）と ASR（${doc.judge.asr}）も OpenAI のモデルであり、OpenAI のエンジンを評価するときに同系統の偏り（言い回しの好み、同じ聞き違い）が出得る。ASR の聞き違いは判定に混ざる。重要な結論は人手で抜き取り確認する。`,
+    `- token: input ${ctx.usage.inputTokens} / output ${ctx.usage.outputTokens}（うち reasoning ${ctx.usage.reasoningTokens}）。判定 1 回の所要時間: ${secondsSummary(ctx.callSeconds)}。`,
+    doc.judge.model.startsWith("agy:")
+      ? `- 判定器は agy 経由の ${doc.judge.model.slice(4)}（OpenAI 以外）。ASR（${doc.judge.asr}）は OpenAI のまま。OpenAI の判定との違いは compare.ts で数値で比べる。ASR の聞き違いは判定に混ざる。`
+      : `- 判定器（${doc.judge.model}）と ASR（${doc.judge.asr}）も OpenAI のモデルであり、OpenAI のエンジンを評価するときに同系統の偏り（言い回しの好み、同じ聞き違い）が出得る（--judge-backend agy で OpenAI 以外の判定と比べられる）。ASR の聞き違いは判定に混ざる。重要な結論は人手で抜き取り確認する。`,
   );
   return `${out.join("\n")}\n`;
 }

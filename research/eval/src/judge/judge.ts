@@ -1,14 +1,16 @@
 /**
  * 判定 CLI（agent D）。
- *   --run <runDir> --reference <abs json> [--model gpt-5.4] [--skip-asr] [--batch 15]
- *   [--prompt-version v1] [--effort medium]
- * 出力: runDir/output-words.json, judgement.json, report.md（いずれも private）。
+ *   --run <runDir> --reference <abs json> [--judge-backend openai|agy] [--model <id>] [--skip-asr]
+ *   [--batch 15] [--prompt-version v1] [--effort medium] [--out-name judgement.json]
+ * --model の既定は openai なら gpt-5.4、agy なら claude-opus-4-6-thinking（judge.model は "agy:<id>"）。
+ * 出力: runDir/output-words.json と、--out-name（既定 judgement.json）・対応する report*.md（いずれも private）。
  * stdout は JudgeAggregate の JSON だけ。本文・path・鍵を出さない。
  */
 import { isAbsolute, join, resolve } from "node:path";
 import type { JudgeDocument, JudgedSegment, ReferenceSegment } from "../engine.ts";
 import { isCurrentOutputWords, parseOutputWords, transcribeTimeline } from "./asr.ts";
-import { parseReference, readBytes, readJson, readJsonIfExists, readRunMeta, readTextIfExists, writeText, type RunMeta } from "./files.ts";
+import { AGY_DEFAULT_MODEL, AGY_EFFORTS, agyPrompt, runAgy } from "./agy.ts";
+import { outputNames, parseReference, readBytes, readJson, readJsonIfExists, readRunMeta, readTextIfExists, writeText, type RunMeta } from "./files.ts";
 import { computeAggregate, resolveSegment } from "./metrics.ts";
 import { createJsonResponse, redactSecrets, supportsReasoning, type Usage } from "./openai.ts";
 import {
@@ -27,18 +29,26 @@ import { parseTranscript } from "./transcript.ts";
 import type { BatchPlan, EnSentence, OutputWord, OutputWordsDocument, RawSegmentJudgement } from "./types.ts";
 import { parseWav } from "./wav.ts";
 
+export type JudgeBackend = "openai" | "agy";
+
 export interface JudgeArgs {
   readonly runDir: string;
   readonly referencePath: string;
+  readonly backend: JudgeBackend;
+  /** 判定ファイル名（report の名前はここから決まる）。 */
+  readonly outName: string;
   readonly model: string;
   readonly skipAsr: boolean;
   readonly batch: number;
   readonly promptVersion: string;
-  readonly effort: string;
+  /** openai は既定 medium。agy はモデルごとに対応が違うので、明示したときだけ渡す（null = 渡さない）。 */
+  readonly effort: string | null;
 }
 
 const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
-const CONCURRENCY = 3;
+const OPENAI_DEFAULT_MODEL = "gpt-5.4";
+/** agy は 1 回 10〜60 秒かかり、並列は 2 まで。 */
+const CONCURRENCY: Readonly<Record<JudgeBackend, number>> = { openai: 3, agy: 2 };
 /** 出力が溜まった run では、最大 queue より後ろまで英語を見せる。 */
 const QUEUE_MARGIN_MS = 15_000;
 
@@ -51,7 +61,7 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
       skipAsr = true;
       continue;
     }
-    if (!flag || !["--run", "--reference", "--model", "--batch", "--prompt-version", "--effort"].includes(flag)) {
+    if (!flag || !["--run", "--reference", "--judge-backend", "--model", "--batch", "--prompt-version", "--effort", "--out-name"].includes(flag)) {
       throw new Error(`unknown argument: ${flag ?? ""}`);
     }
     const value = argv[k + 1];
@@ -66,12 +76,19 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   if (!referencePath || !isAbsolute(referencePath)) throw new Error("--reference <absolute json path> is required");
   const batch = Number(values.get("--batch") ?? "15");
   if (!Number.isInteger(batch) || batch < 1 || batch > 50) throw new Error("--batch must be an integer in 1..50");
-  const effort = values.get("--effort") ?? "medium";
-  if (!EFFORTS.has(effort)) throw new Error(`--effort must be one of ${[...EFFORTS].join(", ")}`);
+  const backend = values.get("--judge-backend") ?? "openai";
+  if (backend !== "openai" && backend !== "agy") throw new Error("--judge-backend must be openai or agy");
+  const effort = values.get("--effort") ?? (backend === "agy" ? null : "medium");
+  const allowed = backend === "agy" ? AGY_EFFORTS : EFFORTS;
+  if (effort !== null && !allowed.has(effort)) throw new Error(`--effort must be one of ${[...allowed].join(", ")} for ${backend}`);
+  const outName = values.get("--out-name") ?? "judgement.json";
+  outputNames(outName);
   return {
     runDir: resolve(runDir),
     referencePath,
-    model: values.get("--model") ?? "gpt-5.4",
+    backend,
+    outName,
+    model: values.get("--model") ?? (backend === "agy" ? AGY_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL),
     skipAsr,
     batch,
     promptVersion: values.get("--prompt-version") ?? DEFAULT_PROMPT_VERSION,
@@ -122,6 +139,33 @@ interface BatchResult {
   readonly judgements: Map<string, RawSegmentJudgement>;
   readonly calls: number;
   readonly usage: Usage;
+  /** 呼び出しごとの所要時間（秒）。 */
+  readonly seconds: ReadonlyArray<number>;
+}
+
+/** 選んだ backend で 1 回判定する（構造化出力の JSON を返す）。 */
+async function callJudge(
+  ctx: { apiKey: string; args: JudgeArgs; instructions: string },
+  input: string,
+  schema: Record<string, unknown>,
+): Promise<{ value: unknown; usage: Usage }> {
+  if (ctx.args.backend === "agy") {
+    return runAgy({
+      model: ctx.args.model,
+      prompt: agyPrompt(ctx.instructions, input),
+      schema,
+      ...(ctx.args.effort ? { effort: ctx.args.effort } : {}),
+    });
+  }
+  return createJsonResponse({
+    apiKey: ctx.apiKey,
+    model: ctx.args.model,
+    instructions: ctx.instructions,
+    input,
+    schemaName: "segment_judgements",
+    schema,
+    ...(ctx.args.effort ? { effort: ctx.args.effort } : {}),
+  });
 }
 
 async function judgeBatch(
@@ -131,28 +175,25 @@ async function judgeBatch(
   const zero: Usage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
   if (plan.wordLo > plan.wordHi) {
     log(`judge: batch ${plan.index + 1}/${ctx.total} has no English words, skipped`);
-    return { judgements: new Map(plan.targets.map((s) => [s.id, noWordsJudgement(s)])), calls: 0, usage: zero };
+    return { judgements: new Map(plan.targets.map((s) => [s.id, noWordsJudgement(s)])), calls: 0, usage: zero, seconds: [] };
   }
   const baseInput = buildBatchInput(plan, ctx.words, ctx.sentences);
+  const schema = responseSchema(plan.targets.map((s) => s.id));
   let input = baseInput;
   let usage = zero;
+  const seconds: number[] = [];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     log(`judge: batch ${plan.index + 1}/${ctx.total} attempt ${attempt} (${plan.targets.length} segments, ${plan.wordHi - plan.wordLo + 1} words)`);
+    const started = performance.now();
     try {
-      const res = await createJsonResponse({
-        apiKey: ctx.apiKey,
-        model: ctx.args.model,
-        instructions: ctx.instructions,
-        input,
-        schemaName: "segment_judgements",
-        schema: responseSchema(plan.targets.map((s) => s.id)),
-        effort: ctx.args.effort,
-      });
+      const res = await callJudge(ctx, input, schema);
+      seconds.push(Math.round((performance.now() - started) / 100) / 10);
+      log(`judge: batch ${plan.index + 1} answered in ${seconds.at(-1)} s`);
       usage = addUsage(usage, res.usage);
       const { judgements, problems } = validateBatchResponse(res.value, plan);
       if (problems.length === 0 || attempt === 2) {
         if (problems.length > 0) log(`judge: batch ${plan.index + 1} kept ${problems.length} problem(s) after retry`);
-        return { judgements, calls: attempt, usage };
+        return { judgements, calls: attempt, usage, seconds };
       }
       log(`judge: batch ${plan.index + 1} has ${problems.length} problem(s), retrying`);
       input = `${baseInput}\n\nYour previous answer had these problems. Fix them and answer again:\n- ${problems.join("\n- ")}`;
@@ -202,27 +243,30 @@ export async function main(argv: ReadonlyArray<string>): Promise<void> {
   const windowAfterMs = Math.max(WINDOW_AFTER_MS, meta.queueMaxMs + QUEUE_MARGIN_MS);
   const plans = planBatches(reference.segments, words, { batchSize: args.batch, beforeMs: WINDOW_BEFORE_MS, afterMs: windowAfterMs });
   const needsLlm = plans.some((p) => p.wordLo <= p.wordHi);
-  if (needsLlm && !apiKey) throw new Error("OPENAI_API_KEY is not set");
-  const results = await mapPool(plans, CONCURRENCY, (plan) =>
+  if (needsLlm && args.backend === "openai" && !apiKey) throw new Error("OPENAI_API_KEY is not set");
+  const results = await mapPool(plans, CONCURRENCY[args.backend], (plan) =>
     judgeBatch(plan, { apiKey: apiKey ?? "", args, instructions, words, sentences, total: plans.length }),
   );
   const raw = new Map<string, RawSegmentJudgement>();
   let usage: Usage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
   let calls = 0;
+  const callSeconds: number[] = [];
   for (const r of results) {
     for (const [id, j] of r.judgements) raw.set(id, j);
     usage = addUsage(usage, r.usage);
     calls += r.calls;
+    callSeconds.push(...r.seconds);
   }
   const segments: JudgedSegment[] = reference.segments.map((seg) => resolveSegment(seg, raw.get(seg.id), words));
   const aggregate = computeAggregate(segments);
   // asrAgreement は JudgeDocument の型に無い欄（judge.asr の横に置く。stdout の aggregate には出さない）。
   const agreement = wordsDoc.agreement;
+  const effortUsed = args.effort !== null && (args.backend === "agy" || supportsReasoning(args.model));
   const judgeInfo = {
-    model: args.model,
+    model: args.backend === "agy" ? `agy:${args.model}` : args.model,
     promptVersion: args.promptVersion,
     asr: wordsDoc.asr.model,
-    ...(supportsReasoning(args.model) ? { effort: args.effort } : {}),
+    ...(effortUsed ? { effort: args.effort } : {}),
     asrAgreement: agreement
       ? {
           agreement: agreement.agreement,
@@ -239,9 +283,10 @@ export async function main(argv: ReadonlyArray<string>): Promise<void> {
     segments,
     aggregate,
   };
-  await writeText(join(args.runDir, "judgement.json"), `${JSON.stringify(doc, null, 2)}\n`);
+  const names = outputNames(args.outName);
+  await writeText(join(args.runDir, names.judgement), `${JSON.stringify(doc, null, 2)}\n`);
   await writeText(
-    join(args.runDir, "report.md"),
+    join(args.runDir, names.report),
     renderReport({
       doc,
       reference,
@@ -251,6 +296,7 @@ export async function main(argv: ReadonlyArray<string>): Promise<void> {
       windowAfterMs,
       batches: plans.length,
       llmCalls: calls,
+      callSeconds,
       usage,
       generatedAtIso: new Date().toISOString(),
     }),

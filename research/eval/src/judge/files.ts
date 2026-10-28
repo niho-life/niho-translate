@@ -47,6 +47,22 @@ export async function writeText(path: string, text: string): Promise<void> {
   }
 }
 
+/** run の成果物と同じ名前は使わせない（上書き防止）。 */
+const RESERVED_NAMES = new Set(["config.json", "summary.json", "output-words.json"]);
+
+/**
+ * 判定の出力ファイル名。--out-name judgement-agy.json → report-agy.md。
+ * 名前は run ディレクトリ直下の .json だけ（path 区切りは不可）。
+ */
+export function outputNames(outName: string): { readonly judgement: string; readonly report: string } {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/.test(outName) || RESERVED_NAMES.has(outName)) {
+    throw new Error("--out-name must be a plain *.json file name that is not a run artifact");
+  }
+  const stem = outName.slice(0, -".json".length);
+  const report = stem.startsWith("judgement") ? `report${stem.slice("judgement".length)}.md` : `${stem}-report.md`;
+  return { judgement: outName, report };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

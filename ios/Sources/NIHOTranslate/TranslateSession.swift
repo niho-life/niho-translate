@@ -15,6 +15,9 @@ public struct TranslateConnectionConfig: Sendable {
     public let role: ParticipantRole
     public let sourceLanguage: TranslateLanguage
     public let targetLanguage: TranslateLanguage
+    /// Soft/hard limits for translated audio waiting to be played. The defaults (2.0 s / 5.0 s) are
+    /// provisional until real-device measurements; see `PlaybackQueueLimits`.
+    public let playbackQueueLimits: PlaybackQueueLimits
 
     public init(
         relayURL: URL,
@@ -23,7 +26,8 @@ public struct TranslateConnectionConfig: Sendable {
         participantId: String,
         role: ParticipantRole,
         sourceLanguage: TranslateLanguage,
-        targetLanguage: TranslateLanguage
+        targetLanguage: TranslateLanguage,
+        playbackQueueLimits: PlaybackQueueLimits = .default
     ) throws {
         guard
             relayURL.scheme == "wss",
@@ -48,6 +52,7 @@ public struct TranslateConnectionConfig: Sendable {
         self.role = role
         self.sourceLanguage = sourceLanguage
         self.targetLanguage = targetLanguage
+        self.playbackQueueLimits = playbackQueueLimits
     }
 }
 
@@ -75,7 +80,9 @@ protocol TranslateSessionAudio: AnyObject, Sendable {
     var onAudioBatch: (@Sendable (Data) -> Void)? { get set }
     var onSpeechBoundary: (@Sendable (TranslateAudioEngine.SpeechBoundary) -> Void)? { get set }
     var onRouteRequiresPause: (@Sendable () -> Void)? { get set }
-    var onPlaybackOverflow: (@Sendable (Int) -> Void)? { get set }
+    var onPlaybackPressure: (@Sendable (PlaybackPressureEvent, Int) -> Void)? { get set }
+    func setPlaybackLimits(_ limits: PlaybackQueueLimits)
+    func playbackStatistics() -> PlaybackQueueStatistics
     func preparePlayback(generation: Int) throws -> Int
     func resumeCapture(generation: Int) throws -> Int
     func stop(generation: Int)
@@ -144,6 +151,10 @@ public final class TranslateSession: ObservableObject {
     @Published public private(set) var captions: [TranslateCaption] = []
     @Published public private(set) var errorCode: String?
     @Published public private(set) var explicitConsent = false
+    /// Latest playback queue observation for the current playback generation. Its `code` is
+    /// `PLAYBACK_BACKPRESSURE_SOFT` or `PLAYBACK_BACKPRESSURE_DROP`; neither stops the session or
+    /// sets `errorCode`. Counters are in `playbackDiagnostics()`.
+    @Published public private(set) var playbackPressure: PlaybackPressureEvent?
 
     public let config: TranslateConnectionConfig
 
@@ -189,6 +200,7 @@ public final class TranslateSession: ObservableObject {
     }
 
     private func finishInitialization() {
+        audio.setPlaybackLimits(config.playbackQueueLimits)
         bindCallbacks()
         captionTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -341,6 +353,13 @@ public final class TranslateSession: ObservableObject {
         }
     }
 
+    /// Content-free playback queue counters for diagnostics: current and maximum depth, soft-limit
+    /// intervals, drops split into silence and voiced audio, and underflows. No audio, caption text,
+    /// or identifiers. Still readable after `leave()`.
+    public func playbackDiagnostics() -> PlaybackQueueStatistics {
+        audio.playbackStatistics()
+    }
+
     public func leave() {
         guard !terminal else { return }
         terminal = true
@@ -444,14 +463,14 @@ public final class TranslateSession: ObservableObject {
                 self.pauseForPrivateRouteLoss(sendPause: true)
             }
         }
-        audio.onPlaybackOverflow = { [weak self] generation in
+        audio.onPlaybackPressure = { [weak self] event, generation in
             Task { @MainActor in
                 guard
                     let self,
                     self.isActive(callbackLifecycleGeneration),
                     self.playbackGeneration == generation
                 else { return }
-                self.failPlaybackBackpressure()
+                self.playbackPressure = event
             }
         }
     }
@@ -660,13 +679,6 @@ public final class TranslateSession: ObservableObject {
 
     private func failConnection(code: String) {
         let reason = errorCode == "PRIVATE_AUDIO_ROUTE_REQUIRED" ? code : (errorCode ?? code)
-        leave()
-        connectionStatus = .failed
-        errorCode = reason
-    }
-
-    private func failPlaybackBackpressure() {
-        let reason = errorCode ?? "PLAYBACK_BACKPRESSURE"
         leave()
         connectionStatus = .failed
         errorCode = reason

@@ -461,7 +461,7 @@ const defaultClock: ProviderClock = {
   clearTimeout: handle => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-function decodeProviderOutput(value: unknown): Buffer {
+export function decodeProviderOutput(value: unknown): Buffer {
   if (
     typeof value !== "string"
     || value.length === 0
@@ -492,6 +492,6 @@ function validOptionalAudioMetadata(event: Record<string, unknown>): boolean {
     && (event.format === undefined || event.format === "pcm16");
 }
 
-function validBufferSize(value: number | undefined): value is number {
+export function validBufferSize(value: number | undefined): value is number {
   return value !== undefined && Number.isFinite(value) && value >= 0;
 }

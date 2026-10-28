@@ -11,5 +11,5 @@
     "types": ["node", "vitest/globals"],
     "skipLibCheck": true
   },
-  "include": ["packages/**/*.ts", "examples/relay-local/**/*.ts", "scripts/**/*.ts", "scripts/**/*.mts", "tests/**/*.ts"]
+  "include": ["packages/**/*.ts", "examples/relay-local/**/*.ts", "scripts/**/*.ts", "scripts/**/*.mts", "tests/**/*.ts", "research/**/*.ts", "research/**/*.mts"]
 }

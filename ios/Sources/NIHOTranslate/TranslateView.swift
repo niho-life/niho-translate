@@ -192,8 +192,6 @@ public struct TranslateView: View {
             return text("利用できる通訳の枠がないため、送信を停止しました。", "Audio sending stopped because interpretation is unavailable.")
         case "CONNECTION_LOST":
             return text("接続が切れました。ルームへ戻り、新しく入り直してください。", "Connection was lost. Return to the room and join again.")
-        case "PLAYBACK_BACKPRESSURE":
-            return text("再生が追いつかないため停止。ルームへ戻って入り直してください。", "Playback could not keep up and was stopped. Return to the room and join again.")
         default:
             return text("通訳を続けられませんでした。一度退出し、ルームに入り直してください。", "Interpretation could not continue. Leave and rejoin the room.")
         }

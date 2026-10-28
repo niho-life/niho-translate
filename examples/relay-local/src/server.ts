@@ -8,6 +8,10 @@ import {
   type ProviderTransportFactory,
 } from "../../../packages/provider-openai/src/index.ts";
 import {
+  OpenAILiveTranslationProvider,
+  resolveLiveSettings,
+} from "../../../packages/provider-openai-live/src/index.ts";
+import {
   JoseTicketVerifier,
   MAX_UNACKNOWLEDGED_DELIVERY_BYTES,
   RelayOrchestrator,
@@ -24,6 +28,7 @@ import {
 import type { AuthorityRoomState } from "../../../packages/room-core/src/index.ts";
 
 const mode = process.env.RELAY_MODE ?? "mock";
+const translateProvider = process.env.TRANSLATE_PROVIDER ?? "translate";
 const port = Number(process.env.PORT ?? "8787");
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("INVALID_PORT");
 
@@ -195,14 +200,32 @@ function main(): void {
       baseURL: authorityUrl,
       serviceToken: process.env.RELAY_SERVICE_TOKEN!,
     });
+    if (translateProvider !== "translate" && translateProvider !== "live") {
+      throw new Error("TRANSLATE_PROVIDER_MUST_BE_TRANSLATE_OR_LIVE");
+    }
+    // Validate GPT-Live settings at startup instead of at the first capture.
+    const liveSettings = translateProvider === "live"
+      ? resolveLiveSettings({
+        preset: process.env.TRANSLATE_LIVE_PRESET,
+        voice: process.env.TRANSLATE_LIVE_VOICE,
+      })
+      : undefined;
     const factory = new NodeWsFactory();
     translations = {
-      create: (language, sink) => new OpenAITranslationProvider(
-        process.env.OPENAI_API_KEY!,
-        language,
-        factory,
-        sink,
-      ),
+      create: (language, sink) => liveSettings
+        ? new OpenAILiveTranslationProvider(
+          process.env.OPENAI_API_KEY!,
+          language,
+          factory,
+          sink,
+          liveSettings,
+        )
+        : new OpenAITranslationProvider(
+          process.env.OPENAI_API_KEY!,
+          language,
+          factory,
+          sink,
+        ),
     };
   } else {
     throw new Error("RELAY_MODE_MUST_BE_MOCK_OR_REAL");
@@ -309,7 +332,8 @@ function main(): void {
   server.listen(port, "127.0.0.1", () => {
     const address = server.address();
     const listeningPort = typeof address === "object" && address ? address.port : port;
-    process.stdout.write(`relay-local listening on 127.0.0.1:${listeningPort} (${mode})\n`);
+    const label = mode === "real" ? `${mode}, ${translateProvider}` : mode;
+    process.stdout.write(`relay-local listening on 127.0.0.1:${listeningPort} (${label})\n`);
   });
   const shutdown = () => {
     void relay.dispose().finally(() => server.close());

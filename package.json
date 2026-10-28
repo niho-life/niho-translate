@@ -15,7 +15,11 @@
     "test:loopback": "node scripts/check-local-relay.mjs",
     "test:wav": "node --disable-warning=ExperimentalWarning --experimental-transform-types scripts/check-wav-replay.mts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "eval:run": "node --disable-warning=ExperimentalWarning --experimental-transform-types research/eval/src/run.ts",
+    "eval:reference": "node --disable-warning=ExperimentalWarning --experimental-transform-types research/eval/src/reference/make-reference.ts",
+    "eval:judge": "node --disable-warning=ExperimentalWarning --experimental-transform-types research/eval/src/judge/judge.ts",
+    "eval:aggregate": "node --disable-warning=ExperimentalWarning --experimental-transform-types research/eval/src/aggregate.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261022.1",

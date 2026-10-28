@@ -2,6 +2,8 @@
 
 調査日：2026-10-28。対象：v1の日英2人対面通訳、iPhoneとprivate headset。追跡Issue：[2026年の同時通訳品質・遅延改善 #21](https://github.com/niho-life/niho-translate/issues/21)。
 
+**2026-10-28 追記:** この文書の測定設計に沿って A（現行）/ B（`gpt-live-1`）/ B2（realtime VAD）/ D'（cascade 試作）を同条件で比較した結果は [translation-quality-eval-2026-10-28.md](translation-quality-eval-2026-10-28.md)、ハーネスは [research/eval](../research/eval/README.md)。
+
 この文書は、次の実装担当が**何を先に試し、どの結果で採否を決めるか**を記す。公開資料にある機能、NIHOの現行コード、実測済みの範囲、未検証の仮説を分ける。製品としての性能保証や、他社製品の内部実装の断定ではない。
 
 ## 1. 結論と優先順位
@@ -26,7 +28,7 @@
 |---|---|---|
 | [`packages/provider-openai/src/index.ts`](../packages/provider-openai/src/index.ts) | `gpt-realtime-translate`、`near_field`、入力文字起こし無効、24 kHz PCM16、出力deltaを最大4,800 byteに分割。初期設定ACKを待ち、送信バッファに上限がある | OpenAIの入力文字起こしは追加できるが、**翻訳の入力として使う機能ではない**。診断用でも公開ログに本文を出さない |
 | [`ios/Sources/NIHOTranslate/TranslateAudioEngine.swift`](../ios/Sources/NIHOTranslate/TranslateAudioEngine.swift) | `.playAndRecord` + `.voiceChat`、Bluetooth HFP、有線route、voice processing、再サンプリング | マイクroute・OS処理・Bluetoothの遅れを含む実機比較が必要。WAV直接送信の結果を実機音質へ外挿しない |
-| [`ios/Sources/NIHOTranslateCore/PlaybackScheduler.swift`](../ios/Sources/NIHOTranslateCore/PlaybackScheduler.swift) | 未再生保持96,000 byte（24 kHz PCM16で約2秒）、同時schedule 19,200 byte（約0.4秒） | overflowは現在terminal停止。上限を増やすだけでは遅れが蓄積する。キュー長・再生完了・overflowを別に観測する |
+| [`ios/Sources/NIHOTranslateCore/PlaybackScheduler.swift`](../ios/Sources/NIHOTranslateCore/PlaybackScheduler.swift) | 未再生保持の上限は 2 段（soft 96,000 byte = 2.0 秒で観測通知、hard 240,000 byte = 5.0 秒で未 schedule の古い無音→古い音声を落として継続。2026-10-28 に terminal 停止から変更）、同時schedule 19,200 byte（約0.4秒） | 上限を増やすだけでは遅れが蓄積する。キュー長・再生完了・soft 超過・drop を別に観測する。実機での既定値の妥当性は未検証 |
 | [`docs/architecture.md`](architecture.md)、[`docs/acceptance.md`](acceptance.md) | 話者別接続、音声・字幕の配信と実機マトリクス | `roomId + roomEpoch` single-writer、lease、ACK、private route、明示resumeを維持。代替providerはこれらの契約を変えずに比較する |
 
 現行SDKは訳字幕を短時間だけメモリ表示する。原文文字起こしを利用者へ出していないため、その精度を現在のUIからは評価できない。OpenAIの任意のsource transcriptは診断・表示候補であり、モデル内部の認識の正解証明にはならない。

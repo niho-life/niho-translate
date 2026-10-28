@@ -54,12 +54,14 @@ protocol v1は全server eventに接続単位で単調増加する `deliveryId` �
 - [セキュリティ](docs/security.md)
 - [受入項目](docs/acceptance.md)
 - [同時通訳の品質・遅延改善：調査と実装者向け実験仕様](docs/translation-quality-research.md)
+- [日英同時通訳 比較評価 2026-10-28（現行 / gpt-live-1 / realtime VAD / cascade）](docs/translation-quality-eval-2026-10-28.md)・[比較評価ハーネス](research/eval/README.md)
+- [日英同時通訳の設計に関する研究・製品の調査（2026-10）](docs/simultaneous-interpretation-landscape-2026.md)
 
 実通訳のtransportは送信バッファを観測できるNode版relayを使います。現在のCloudflare例は未観測のためprovider設定前に安全停止します。翻訳中の設定更新をheartbeatに使わず、Nodeのnative ping/pongで生存を確認します。詳しくは [Node版の運用条件](examples/relay-local/README.md) を参照してください。
 
 ## 未完了の受入
 
-provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信しました。合成音声の時刻・金額・否定は初回両方向で一致し、繰り返しの1回では金額の自動判定が不一致でした。意味精度の人による確認、実iPhone・ホスト認可/予算を含むroom全体、Node版relayを使うホスト側の配備・接続先更新と実回線watchdog、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。
+provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信しました。合成音声の時刻・金額・否定は初回両方向で一致し、繰り返しの1回では金額の自動判定が不一致でした。意味精度の人による確認、実iPhone・ホスト認可/予算を含むroom全体、Node版relayを使うホスト側の配備・接続先更新と実回線watchdog、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。GPT-Live adapter（`packages/provider-openai-live`）はfake transportの自動テストと合成音声1回の実API smoke（訳音声・訳字幕・原文字幕の受信と`session.closed`までのdrain）までで、実iPhone・room全体・60分連続運転は未確認です。
 
 ## 権利
 

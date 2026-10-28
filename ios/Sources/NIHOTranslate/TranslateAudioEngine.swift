@@ -34,14 +34,14 @@ public final class TranslateAudioEngine: @unchecked Sendable {
     private var running = false
     private var captureActive = false
     private var listeningPaused = false
-    private var playbackOverflowNotified = false
     private var speaking = false
     private var silentSinceMs: Int64?
 
     public var onAudioBatch: (@Sendable (Data) -> Void)?
     public var onSpeechBoundary: (@Sendable (SpeechBoundary) -> Void)?
     public var onRouteRequiresPause: (@Sendable () -> Void)?
-    public var onPlaybackOverflow: (@Sendable (Int) -> Void)?
+    /// Content-free, non-terminal queue observations with the playback generation they belong to.
+    public var onPlaybackPressure: (@Sendable (PlaybackPressureEvent, Int) -> Void)?
 
     public init() {
         engine.attach(player)
@@ -143,15 +143,29 @@ public final class TranslateAudioEngine: @unchecked Sendable {
                 return
             }
             switch self.playbackScheduler.enqueueResult(data, generation: playbackGeneration) {
-            case .accepted(let reservations):
+            case .accepted(let reservations, let events):
                 self.schedulePlayback(reservations)
-            case .overflow:
-                guard !self.playbackOverflowNotified else { return }
-                self.playbackOverflowNotified = true
-                self.onPlaybackOverflow?(playbackGeneration)
+                for event in events {
+                    self.onPlaybackPressure?(event, playbackGeneration)
+                }
             case .staleGeneration, .paused, .invalid:
                 return
             }
+        }
+    }
+
+    /// Applies the unplayed-audio limits from `TranslateConnectionConfig`. Queued audio and
+    /// counters are kept; the limits apply to the next enqueue.
+    public func setPlaybackLimits(_ limits: PlaybackQueueLimits) {
+        pipeline.sync {
+            playbackScheduler.setLimits(limits)
+        }
+    }
+
+    /// Content-free playback queue counters. They survive playback generation changes.
+    public func playbackStatistics() -> PlaybackQueueStatistics {
+        pipeline.sync {
+            playbackScheduler.statistics
         }
     }
 
@@ -159,7 +173,6 @@ public final class TranslateAudioEngine: @unchecked Sendable {
     public func invalidatePlayback() -> Int {
         pipeline.sync {
             playbackGeneration += 1
-            playbackOverflowNotified = false
             player.stop()
             playbackScheduler.reset(generation: playbackGeneration, paused: listeningPaused)
             if running && !listeningPaused { player.play() }
@@ -173,7 +186,6 @@ public final class TranslateAudioEngine: @unchecked Sendable {
             listeningPaused = paused
             if paused {
                 playbackGeneration += 1
-                playbackOverflowNotified = false
                 player.stop()
                 playbackScheduler.reset(generation: playbackGeneration, paused: true)
             } else if running {
@@ -236,7 +248,6 @@ public final class TranslateAudioEngine: @unchecked Sendable {
         captureConverter = nil
         captureBytes.removeAll(keepingCapacity: false)
         playbackGeneration += 1
-        playbackOverflowNotified = false
         playbackScheduler.reset(generation: playbackGeneration, paused: listeningPaused)
         running = false
         captureActive = false
@@ -417,9 +428,11 @@ public final class TranslateAudioEngine: @unchecked Sendable {
     public var onAudioBatch: (@Sendable (Data) -> Void)?
     public var onSpeechBoundary: (@Sendable (SpeechBoundary) -> Void)?
     public var onRouteRequiresPause: (@Sendable () -> Void)?
-    public var onPlaybackOverflow: (@Sendable (Int) -> Void)?
+    public var onPlaybackPressure: (@Sendable (PlaybackPressureEvent, Int) -> Void)?
 
     public init() {}
+    public func setPlaybackLimits(_ limits: PlaybackQueueLimits) {}
+    public func playbackStatistics() -> PlaybackQueueStatistics { PlaybackQueueStatistics() }
     public func preparePlayback(generation: Int) throws -> Int { throw TranslateProtocolError.invalidField }
     public func resumeCapture(generation: Int) throws -> Int { throw TranslateProtocolError.invalidField }
     public func start(generation: Int) throws -> Int { throw TranslateProtocolError.invalidField }

@@ -56,15 +56,28 @@ private final class FakeAudio: TranslateSessionAudio, @unchecked Sendable {
     var onAudioBatch: (@Sendable (Data) -> Void)?
     var onSpeechBoundary: (@Sendable (TranslateAudioEngine.SpeechBoundary) -> Void)?
     var onRouteRequiresPause: (@Sendable () -> Void)?
-    var onPlaybackOverflow: (@Sendable (Int) -> Void)?
+    var onPlaybackPressure: (@Sendable (PlaybackPressureEvent, Int) -> Void)?
     var prepareCount = 0
     var resumeCount = 0
     var pauseCount = 0
     var stopCount = 0
     var enqueueCount = 0
     var listeningPauseValues: [Bool] = []
+    var appliedPlaybackLimits: [PlaybackQueueLimits] = []
     var shouldFailRoute = false
     private var playbackGeneration = 0
+    private var listeningPaused = false
+    /// The real Core scheduler with nothing ever played, as if the player stalled.
+    private var scheduler = PlaybackScheduler()
+
+    func setPlaybackLimits(_ limits: PlaybackQueueLimits) {
+        appliedPlaybackLimits.append(limits)
+        scheduler.setLimits(limits)
+    }
+
+    func playbackStatistics() -> PlaybackQueueStatistics {
+        scheduler.statistics
+    }
 
     func preparePlayback(generation: Int) throws -> Int {
         prepareCount += 1
@@ -80,16 +93,28 @@ private final class FakeAudio: TranslateSessionAudio, @unchecked Sendable {
 
     func stop(generation: Int) { stopCount += 1 }
     func pauseCapture(generation: Int) { pauseCount += 1 }
-    func enqueueTranslatedPCM(_ data: Data, playbackGeneration: Int) { enqueueCount += 1 }
+    func enqueueTranslatedPCM(_ data: Data, playbackGeneration: Int) {
+        enqueueCount += 1
+        for event in scheduler.enqueueResult(data, generation: playbackGeneration).events {
+            onPlaybackPressure?(event, playbackGeneration)
+        }
+    }
 
     func invalidatePlayback() -> Int {
         playbackGeneration += 1
+        scheduler.reset(generation: playbackGeneration, paused: listeningPaused)
         return playbackGeneration
     }
 
     func setListeningPaused(_ paused: Bool) -> Int {
         listeningPauseValues.append(paused)
-        if paused { playbackGeneration += 1 }
+        listeningPaused = paused
+        if paused {
+            playbackGeneration += 1
+            scheduler.reset(generation: playbackGeneration, paused: true)
+        } else {
+            _ = scheduler.setPaused(false, generation: playbackGeneration)
+        }
         return playbackGeneration
     }
 
@@ -97,8 +122,8 @@ private final class FakeAudio: TranslateSessionAudio, @unchecked Sendable {
         onRouteRequiresPause?()
     }
 
-    func overflow(generation: Int? = nil) {
-        onPlaybackOverflow?(generation ?? playbackGeneration)
+    func pressure(_ event: PlaybackPressureEvent, generation: Int? = nil) {
+        onPlaybackPressure?(event, generation ?? playbackGeneration)
     }
 }
 
@@ -118,7 +143,10 @@ private final class FakePermissionProvider: MicrophonePermissionProviding {
 
 @MainActor
 final class SessionTests: XCTestCase {
-    private func config(role: ParticipantRole = .guest) throws -> TranslateConnectionConfig {
+    private func config(
+        role: ParticipantRole = .guest,
+        playbackQueueLimits: PlaybackQueueLimits = .default
+    ) throws -> TranslateConnectionConfig {
         try TranslateConnectionConfig(
             relayURL: URL(string: "wss://relay.example.invalid/translate")!,
             scopedTicket: "synthetic-ticket",
@@ -126,7 +154,8 @@ final class SessionTests: XCTestCase {
             participantId: "self",
             role: role,
             sourceLanguage: role == .host ? .ja : .en,
-            targetLanguage: role == .host ? .en : .ja
+            targetLanguage: role == .host ? .en : .ja,
+            playbackQueueLimits: playbackQueueLimits
         )
     }
 
@@ -136,6 +165,17 @@ final class SessionTests: XCTestCase {
 
     private func settle() async {
         for _ in 0..<8 { await Task.yield() }
+    }
+
+    /// Voiced 200 ms chunks from the admitted speaker "other" (generation 1).
+    private func emitTranslatedAudio(_ transport: FakeTransport, chunks: Int, firstDeliveryId: Int) throws {
+        for offset in 0..<chunks {
+            transport.emit(try event([
+                "v": 1, "type": "audio", "deliveryId": firstDeliveryId + offset,
+                "speakerId": "other", "generation": 1, "language": "en",
+                "audio": Data(repeating: 1, count: maxPcmBatchBytes).base64EncodedString(),
+            ]))
+        }
     }
 
     func testRelayURLAndHeaderRejectCredentialLeakage() {
@@ -400,11 +440,12 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(audio.resumeCount, 2)
     }
 
-    func testCurrentPlaybackOverflowStopsOnceAndRequiresFreshSession() async throws {
+    func testPlaybackOverflowDropsOldAudioAndKeepsSessionRunning() async throws {
         let transport = FakeTransport()
         let audio = FakeAudio()
+        let limits = try PlaybackQueueLimits(softLimitBytes: 19_200, hardLimitBytes: 38_400)
         let session = TranslateSession(
-            config: try config(), transport: transport, audio: audio,
+            config: try config(playbackQueueLimits: limits), transport: transport, audio: audio,
             permissionProvider: FakePermissionProvider(.granted)
         )
         session.setExplicitConsent(true)
@@ -414,35 +455,78 @@ final class SessionTests: XCTestCase {
             "v": 1, "type": "session.identity", "deliveryId": 1,
             "participantId": "self", "generation": 1,
         ]))
+        transport.emit(try event([
+            "v": 1, "type": "participant.state", "deliveryId": 2,
+            "participant": [
+                "participantId": "other", "sourceLanguage": "ja", "targetLanguage": "en",
+                "role": "host", "generation": 1, "state": "ready",
+            ],
+            "connected": true,
+        ]))
         await settle()
 
-        audio.overflow()
-        audio.overflow()
+        // The fake never plays, so 200 ms chunks pile up like a burst at a phrase boundary.
+        try emitTranslatedAudio(transport, chunks: 3, firstDeliveryId: 3)
         await settle()
+        XCTAssertEqual(session.playbackPressure, .backpressure(depthBytes: 28_800))
+        XCTAssertEqual(session.playbackPressure?.code, "PLAYBACK_BACKPRESSURE_SOFT")
+        XCTAssertEqual(session.connectionStatus, .connected)
+        XCTAssertNil(session.errorCode)
 
-        XCTAssertEqual(session.connectionStatus, .failed)
-        XCTAssertEqual(session.errorCode, "PLAYBACK_BACKPRESSURE")
-        XCTAssertFalse(session.explicitConsent)
-        XCTAssertTrue(session.micMuted)
-        XCTAssertTrue(session.listeningPaused)
-        XCTAssertEqual(transport.disconnectCount, 1)
-        XCTAssertEqual(audio.stopCount, 1)
-        XCTAssertEqual(transport.connectCount, 1)
-        session.setExplicitConsent(true)
-        session.requestPermissionAndConnect()
-        XCTAssertEqual(transport.connectCount, 1)
-
-        let freshTransport = FakeTransport()
-        let fresh = TranslateSession(
-            config: try config(), transport: freshTransport, audio: FakeAudio(),
-            permissionProvider: FakePermissionProvider(.granted)
+        try emitTranslatedAudio(transport, chunks: 2, firstDeliveryId: 6)
+        await settle()
+        XCTAssertEqual(
+            session.playbackPressure,
+            .overflow(PlaybackDrop(voicedChunks: 1, voicedBytes: 9_600))
         )
-        fresh.setExplicitConsent(true)
-        fresh.requestPermissionAndConnect()
-        XCTAssertEqual(freshTransport.connectCount, 1)
+        XCTAssertEqual(session.playbackPressure?.code, "PLAYBACK_BACKPRESSURE_DROP")
+
+        XCTAssertEqual(session.connectionStatus, .connected)
+        XCTAssertNil(session.errorCode)
+        XCTAssertTrue(session.explicitConsent)
+        XCTAssertFalse(session.listeningPaused)
+        XCTAssertEqual(transport.disconnectCount, 0)
+        XCTAssertEqual(audio.stopCount, 0)
+        XCTAssertEqual(audio.enqueueCount, 5)
+        let diagnostics = session.playbackDiagnostics()
+        XCTAssertEqual(diagnostics.depthMs, 800)
+        XCTAssertEqual(diagnostics.maxDepthMs, 800)
+        XCTAssertEqual(diagnostics.backpressureCount, 1)
+        XCTAssertEqual(diagnostics.overflowCount, 1)
+        XCTAssertEqual(diagnostics.droppedVoicedMs, 200)
+        XCTAssertEqual(diagnostics.droppedSilentMs, 0)
+
+        session.leave()
+        XCTAssertEqual(session.playbackDiagnostics().overflowCount, 1)
+        XCTAssertEqual(session.playbackDiagnostics().depthBytes, 0)
     }
 
-    func testStalePlaybackOverflowAndCallbackAfterLeaveAreIgnored() async throws {
+    func testPlaybackQueueLimitsDefaultToConfigAndReachAudio() throws {
+        XCTAssertEqual(try config().playbackQueueLimits, .default)
+        let defaultAudio = FakeAudio()
+        let defaultSession = TranslateSession(
+            config: try config(), transport: FakeTransport(), audio: defaultAudio,
+            permissionProvider: FakePermissionProvider(.granted)
+        )
+        XCTAssertEqual(defaultAudio.appliedPlaybackLimits, [.default])
+        XCTAssertEqual(defaultSession.playbackDiagnostics().softLimitBytes, 96_000)
+        XCTAssertEqual(defaultSession.playbackDiagnostics().hardLimitBytes, 240_000)
+        XCTAssertNil(defaultSession.playbackPressure)
+
+        let limits = try PlaybackQueueLimits(softLimitBytes: 48_000, hardLimitBytes: 144_000)
+        let audio = FakeAudio()
+        let session = TranslateSession(
+            config: try config(playbackQueueLimits: limits), transport: FakeTransport(), audio: audio,
+            permissionProvider: FakePermissionProvider(.granted)
+        )
+        XCTAssertEqual(audio.appliedPlaybackLimits, [limits])
+        XCTAssertEqual(session.playbackDiagnostics().softLimitBytes, 48_000)
+        XCTAssertEqual(session.playbackDiagnostics().hardLimitBytes, 144_000)
+        defaultSession.leave()
+        session.leave()
+    }
+
+    func testStalePlaybackPressureAndCallbackAfterLeaveAreIgnored() async throws {
         let transport = FakeTransport()
         let audio = FakeAudio()
         let session = TranslateSession(
@@ -454,23 +538,25 @@ final class SessionTests: XCTestCase {
         transport.emit(.connected)
         await settle()
 
-        audio.overflow(generation: -1)
+        audio.pressure(.overflow(PlaybackDrop(voicedChunks: 1, voicedBytes: 4_800)), generation: -1)
         await settle()
+        XCTAssertNil(session.playbackPressure)
         XCTAssertEqual(session.connectionStatus, .connected)
         XCTAssertNil(session.errorCode)
 
         session.leave()
         let disconnectCount = transport.disconnectCount
         let stopCount = audio.stopCount
-        audio.overflow()
+        audio.pressure(.backpressure(depthBytes: 100_800))
         await settle()
+        XCTAssertNil(session.playbackPressure)
         XCTAssertEqual(session.connectionStatus, .disconnected)
         XCTAssertNil(session.errorCode)
         XCTAssertEqual(transport.disconnectCount, disconnectCount)
         XCTAssertEqual(audio.stopCount, stopCount)
     }
 
-    func testPlaybackOverflowDoesNotOverwriteExistingBudgetError() async throws {
+    func testPlaybackPressureKeepsExistingBudgetErrorAndConnection() async throws {
         let transport = FakeTransport()
         let audio = FakeAudio()
         let session = TranslateSession(
@@ -486,15 +572,16 @@ final class SessionTests: XCTestCase {
         ]))
         await settle()
 
-        audio.overflow()
+        audio.pressure(.overflow(PlaybackDrop(silentChunks: 1, silentBytes: 4_800)))
         await settle()
 
-        XCTAssertEqual(session.connectionStatus, .failed)
+        XCTAssertEqual(session.playbackPressure?.code, PlaybackPressureEvent.overflowCode)
+        XCTAssertEqual(session.connectionStatus, .connected)
         XCTAssertEqual(session.errorCode, "LEASE_EXPIRED")
-        XCTAssertEqual(transport.disconnectCount, 1)
+        XCTAssertEqual(transport.disconnectCount, 0)
     }
 
-    func testLatePlaybackOverflowDoesNotOverwriteFatalRelayError() async throws {
+    func testLatePlaybackPressureAfterFatalRelayErrorIsIgnored() async throws {
         let transport = FakeTransport()
         let audio = FakeAudio()
         let session = TranslateSession(
@@ -511,9 +598,10 @@ final class SessionTests: XCTestCase {
         await settle()
         let disconnectCount = transport.disconnectCount
 
-        audio.overflow()
+        audio.pressure(.overflow(PlaybackDrop(voicedChunks: 1, voicedBytes: 4_800)))
         await settle()
 
+        XCTAssertNil(session.playbackPressure)
         XCTAssertEqual(session.connectionStatus, .disconnected)
         XCTAssertEqual(session.errorCode, "PROVIDER_ERROR")
         XCTAssertEqual(transport.disconnectCount, disconnectCount)

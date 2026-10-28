@@ -2,7 +2,7 @@
  * 正解原稿（時刻付き日本語区間）を作る CLI。
  *
  *   npm --silent run eval:reference -- --wav <abs.wav> --window <startSec>:<endSec> --source-id <id> \
- *     [--turn-transcript <abs.md>] [--out <abs.json>] [--llm gpt-5.4] [--reasoning medium] \
+ *     [--turn-transcript <abs.md>] [--out <abs.json>] [--llm anthropic:claude-opus-5-5 | gpt-5.4] [--reasoning medium] \
  *     [--whisper-cli-model <abs.bin>] [--draft <abs.json>] [--refresh-asr] [--refresh-llm] [--no-vad-trim]
  *
  * 中間物（切り出した WAV、ASR 応答、LLM 下書き）は $EVAL_PRIVATE_DIR/work/agentC/<sourceId>/ に置き、
@@ -18,7 +18,8 @@ import { parseMakeReferenceArgs, type MakeReferenceArgs } from "./args.ts";
 import { parseDiarized, parseWhisperCpp, parseWhisperVerbose, readWavPcm16 } from "./asr.ts";
 import { buildReference } from "./build.ts";
 import { buildDraftRequest, DISCREPANCY_CATEGORIES, isUnresolved, parseDraftSegments, PROMPT_VERSION, type Draft, type DraftInput } from "./draft.ts";
-import { createResponse, OpenAIRequestError, redactSecrets, transcribe, type ResponseUsage } from "./openai.ts";
+import { createAnthropicResponse, isAnthropicModel } from "./anthropic.ts";
+import { createResponse, OpenAIRequestError, redactSecrets, transcribe, type ResponseResult, type ResponseUsage } from "./openai.ts";
 import { renderReview } from "./review.ts";
 import { referenceStats } from "./stats.ts";
 import { applyFactsPass, buildFactsRequest, FACTS_PROMPT_VERSION, parseFactsOutput } from "./facts.ts";
@@ -30,6 +31,9 @@ const TRANSCRIBE_USD_PER_MIN = 0.006;
 const LLM_PRICES: Readonly<Record<string, { input: number; cached: number; output: number }>> = {
   "gpt-5.4": { input: 2.5, cached: 0.25, output: 15 },
   "gpt-5.4-mini": { input: 0.75, cached: 0.075, output: 4.5 },
+  "anthropic:claude-opus-5-5": { input: 4, cached: 0.2, output: 20 },
+  "anthropic:claude-sonnet-5-5": { input: 2, cached: 0.2, output: 10 },
+  "anthropic:claude-fable-5-1": { input: 10, cached: 0.25, output: 50 },
 };
 const DIARIZE_USD_PER_M = { input: 6, output: 10 };
 
@@ -94,10 +98,16 @@ async function cachedJson(path: string, useCache: boolean, produce: () => Promis
   return { value, cached: false };
 }
 
-function requireKey(): string {
-  const key = process.env["OPENAI_API_KEY"];
-  if (key === undefined || key.length === 0) throw new Error("OPENAI_API_KEY is required");
+function requireKey(name = "OPENAI_API_KEY"): string {
+  const key = process.env[name];
+  if (key === undefined || key.length === 0) throw new Error(`${name} is required`);
   return key;
+}
+
+/** --llm / --facts-llm が anthropic:<id> なら Anthropic、それ以外は OpenAI Responses。 */
+function callLlm(request: Record<string, unknown>): Promise<ResponseResult> {
+  const model = String(request["model"] ?? "");
+  return isAnthropicModel(model) ? createAnthropicResponse(requireKey("ANTHROPIC_API_KEY"), request) : createResponse(requireKey(), request);
 }
 
 function llmCost(model: string, usage: ResponseUsage): number | null {
@@ -238,7 +248,7 @@ async function main(args: MakeReferenceArgs): Promise<void> {
       log("llm: cached draft");
     } else {
       const started = Date.now();
-      const response = await createResponse(requireKey(), request);
+      const response = await callLlm(request);
       if (response.status !== "completed") throw new Error(`llm response ${response.status}`);
       const parsed = JSON.parse(response.text) as Record<string, unknown>;
       draft = {
@@ -270,7 +280,7 @@ async function main(args: MakeReferenceArgs): Promise<void> {
       factsCached = true;
     } else {
       const started = Date.now();
-      const response = await createResponse(requireKey(), request);
+      const response = await callLlm(request);
       if (response.status !== "completed") throw new Error(`facts response ${response.status}`);
       const parsed = JSON.parse(response.text) as unknown;
       passFacts = parseFactsOutput(parsed, draft.segments.length);

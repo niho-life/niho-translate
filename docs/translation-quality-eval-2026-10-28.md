@@ -153,3 +153,26 @@ A 100 ms の重大誤り 2 件は、1 run で 2 分間の音声・字幕不一�
 
 - **結論: 60 分運転にセッション切替は要らない。** §8.3 の「約 42 分で上限」は、上限に達すると API が自動で圧縮することを見落としていた。2 時間を超える運転だけがセッション期限に当たる（製品 adapter は期限を見て失敗させる既存の挙動のまま）。
 - 未検証: 圧縮直後の訳の質（文脈を失った直後に固有名詞や人称が崩れないか）。圧縮点の 1.5 分後から始まる 5 分（講演調の録音の既存の窓と同じ範囲）を切り出して判定する準備をしたが、API の利用枠が尽きて判定は未実施。
+
+### 8.7 第二審判 Claude Opus 5.5 による再判定（同日）
+
+採点する側も採点される側も OpenAI という構造を外すため、判定器を Anthropic API（Claude Opus 5.5、effort high、同じ prompt・同じ strict JSON schema）でも動かせるようにし（`--judge-backend anthropic`）、§8.5 と同じ Gemini 原稿で主要 27 run（＋残高切れで未判定だった B plain の 2 run）を再判定した。whisper の単語時刻は既存のものを再利用し、OpenAI は呼んでいない。
+
+| 条件 | 意味 gpt-5.4 → Claude | 重大誤り gpt-5.4 → Claude | 訳抜け flag gpt-5.4 → Claude |
+|---|---|---|---|
+| A 現行 translate f200（11 run・432 区間） | 2.19 → 2.29 | 26 → 19 | 58 → 19 |
+| B gpt-live-1 domain-glossary（6 run・242 区間） | 2.29 → 2.41 | 6 → 3 | 31 → 14 |
+| B gpt-live-1 plain（4 run・158 区間） | 2.52 → 2.58 | 3 → 1 | 11 → 2 |
+| B gpt-live-1 plain-q（6 run・240 区間） | 2.53 → 2.70 | 1 → 2 | 14 → 2 |
+
+区間ごとの一致（1,072 区間の対）: 意味の完全一致 77%、±1 以内 99%、Claude − gpt-5.4 の平均 +0.11、Spearman 0.81、二次重み付き κ 0.82、aligned の一致 99%。重大誤り（同じ区間・同じ fact）は gpt-5.4 36 件・Claude 25 件・両方 20 件。訳抜け flag は gpt-5.4 114・Claude 37・両方 35（Claude の訳抜けはほぼ gpt-5.4 の部分集合。短い省略を Claude は訳抜けと呼ばない）。幻覚 flag は 63・47・両方 40。
+
+- **結論は不変。** どちらの審判でも A < B domain-glossary < B plain < B plain-q の順。B plain-q と A の差は gpt-5.4 で +0.34、Claude で +0.41 と、Claude の方が差を大きく見る。窓ごとの 16 組でも B が A を下回る窓はない（§3 と同じ）。
+- Claude は全体に 0.1 甘い（B plain-q で +0.17）。重大誤りの件数も少なめだが、A 19 件 vs B plain-q 2 件という構造は同じ。
+- 残高切れで未判定だった B plain の 2 run（w2・w3）は Claude で意味 2.63・重大誤り 2/82。
+- 費用: 29 run・95 呼び出しで $7.96（Anthropic。入力 67.7 万 / 出力 26.3 万 token）。1 呼び出し平均 25 秒・最大 35 秒。
+- **決定: 既定の判定器を Claude Opus 5.5 にする**（owner の方針「LLM の文章処理は Anthropic API を使う」10/28。`judgement.json` の `judge.model` に `anthropic:claude-opus-5-5` が入る）。gpt-5.4 は `--judge-backend openai` で第二審判として残す。それ以前の run の `judgement.json` は gpt-5.4 のままなので、審判が違う判定を混ぜて集計しない（29 run には `judgement-claude.json` を併置）。
+
+### 8.8 原稿作成を Claude で（同日）
+
+原稿の下書きと facts の LLM も `--llm anthropic:claude-opus-5-5` で動かせるようにし、w1 を同じ 4 系統（Gemini 転記）から作り直して gpt-5.4 版と比べた。本文の全文一致度は 0.96（1,540 字 vs 1,519 字）、区間数は 55 vs 43（Claude は文を細かく切る）、facts は 57 vs 71（時制・時刻が少なめ）。所要は下書き 119 秒＋facts 15 秒、費用 $0.40（gpt-5.4 版は $0.24）。本文は同等で区切りだけ違うので、既存の原稿は作り直さず、新しい窓から Claude を既定にする。

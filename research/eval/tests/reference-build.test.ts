@@ -32,13 +32,13 @@ describe("make-reference arguments", () => {
       windowEndSec: 450,
       sourceId: "src1-w1",
       transcriptKind: "human",
-      llm: "gpt-5.4",
+      llm: "anthropic:claude-opus-5-5",
       reasoning: "medium",
       refreshAsr: false,
       refreshLlm: false,
       vadTrim: true,
       factsPass: true,
-      factsLlm: "gpt-5.4",
+      factsLlm: "anthropic:claude-opus-5-5",
       factsReasoning: "low",
     });
   });

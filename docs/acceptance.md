@@ -10,7 +10,7 @@
 - delivery: 全media/non-mediaの単調deliveryId、未ACK 512 KiB/128 event、ACKなしlistener停止、未来ACK拒否、duplicate/old connection ACK fence、listener喪失時provider停止
 - presence: 接続/ready/切断/5秒同期、定常sync中の音声継続、single-flight、current admission照合、遅い旧世代応答の破棄、sync失敗fail-closed、明示resume、15秒client ping timeout、restart後の旧grant拒否
 - lease: 最大15秒、`maxInputAudioMs`、relay受信時刻による200 ms burst/rate、300 ms usage遅延中の音声継続、pending/in-flight snapshot、stop/renew時のfinal drain、同lease ledger、usage/renew各single-flight、結果不明snapshotの非再送とlease quarantine、renew中継続、期限後renew拒否、遅い旧source応答の破棄、新lease IDでの明示resume
-- Swift core/Session fake: input/output PCM、captionOnly、room/identity/ping/ACK encoding、delivery順序/reset、bounded outgoing/inflight、self/speaker generation gate、connection/task callback fence、Native ping single-flight/pong/timeout/旧callback gate、private route no-auto-resumeと明示capture再開、退出後のsocket/audio/permission/send完了破棄、同一Sessionのticket再試行拒否、PCM先行予約、96,000-byte上限で既存queue順序を保つoverflow拒否、現行overflowのterminal停止、pause/reset、旧completion/overflow fence
+- Swift core/Session fake: input/output PCM、captionOnly、room/identity/ping/ACK encoding、delivery順序/reset、bounded outgoing/inflight、self/speaker generation gate、connection/task callback fence、Native ping single-flight/pong/timeout/旧callback gate、private route no-auto-resumeと明示capture再開、退出後のsocket/audio/permission/send完了破棄、同一Sessionのticket再試行拒否、PCM先行予約、soft上限超過のbackpressure観測（区間ごとに1回・拒否なし）、hard上限で未予約の完全無音→新しい完全無音片→最古の片の順のdropと順序を保った再生継続（最小の非ゼロsampleを含む片は音声扱い）、深さ・最大・soft超過ms・drop（無音/音声）・underflowのcounters、`playbackQueueLimits`の既定値（2.0秒/5.0秒）・範囲検証・反映、発話の切れ目のまとめ出しを模した理想再生でdropなし、30秒分の過剰到着で未再生が5秒に収まり最新の片まで再生、overflowでSessionを止めず`errorCode`を変えない`PLAYBACK_BACKPRESSURE_SOFT`/`PLAYBACK_BACKPRESSURE_DROP`の分類、pause/reset、旧completion/観測callback fence
 - offline WAV replay: fake transportを注入した実provider adapterの可変長deltaの無音正規化後の音声一致と、`127.0.0.1`のreference mock relayへ実WebSocket 2接続した双方向protocol/ACK/byte順序/自己配信なし。WAVなしはメモリ上の非音声PCM、WAV指定時は最大60秒をffmpegで24 kHz mono PCM16へ変換し、音声・字幕・path・filename・PCMを保存または表示しない
 - SwiftPM macOS build/testとiOS 15.5 simulator SDK source/example typecheck
 - provider終了/期限: 末尾音声と遅いcontrol ACK、flush ACKなし/未送信input破棄時はoutputDrained=false、再入する予期せぬ切断の一度だけの通知、仮想時計での1時間期限・期限後input拒否、relayの安全停止・明示resume・旧provider末尾の破棄
@@ -50,6 +50,7 @@
 6. production single-writer routing、process restart/alarm復帰、bounded tombstone cleanup
 7. アクセシビリティ、日英文言、host/guestの実操作
 8. 実回線で約15秒の接続期限、5秒間隔Native ping、最大約10秒のpong期限、無音継続、network切替後の切断表示とfresh ticket + 新Sessionでの復帰
+9. 再生queueの2段上限（soft 2.0秒・hard 5.0秒）は実機未検証です。iPhone実機のHFP/有線、Wi-Fi/携帯回線で、発話の切れ目のまとめ出しと長い連続発話を流し、`playbackDiagnostics()`の最大深さ、soft超過の区間数と累計ms、drop回数と無音/音声別のms、underflowを記録します。dropした訳音声の聞こえ方（欠落・つながり）を人が確認し、既定値を見直します。
 
 上記が完了するまで、製品としての実API/実iPhone接続・10秒受入・60分連続運転・実回線watchdogの全体合格とは報告しません。provider単体の実API試験範囲は末尾に記録します。構文check、pure gate、fake transport成功も実通信成功の代用にしません。watchdogの合格はtransport生存確認に限り、翻訳成功の合格とは分けます。
 

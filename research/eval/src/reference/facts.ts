@@ -9,7 +9,7 @@ import type { DraftFact, DraftSegment } from "./draft.ts";
 import { locateInOriginal } from "./normalize.ts";
 import { FACT_TYPES } from "./validate.ts";
 
-export const FACTS_PROMPT_VERSION = "reference-facts-v3";
+export const FACTS_PROMPT_VERSION = "reference-facts-v4";
 
 export function buildFactsInstructions(): string {
   return `あなたは同時通訳の評価に使う「fact」（訳で落としてはならない要素）を、日本語の区間の本文から抜き出す担当です。
@@ -19,6 +19,7 @@ export function buildFactsInstructions(): string {
 - amount: 金額・価格・面積・距離など単位付きの量（2000万円、50平米）
 - negation: 否定・不可能・禁止の述語（ありません、できない、わからない、なかった、だめ、無理）。「〜じゃないですか」の念押しや「〜ないですけど」の前置きのように否定の意味を持たないものは含めない。
 - place: 地名（国・都市・市町村・地域・駅・海岸など。アメリカ、横浜、湘南）
+- legal_right: 不動産の権利形態（所有権、賃借権、借地権など）。売買・賃貸という取引の説明とは区別する
 - proper_noun: 地名以外の固有名詞（人名・会社名・組織名・制度やサービスの名前・作品名）
 - condition: 条件・仮定の節（〜だったら、〜の場合は、〜すれば、〜としても）
 - subject: 動作や判断の主体が明示されているときのその語句（私、オーナーさんが、外国籍の方が）

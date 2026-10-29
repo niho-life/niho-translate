@@ -122,7 +122,7 @@ export function renderTable(rows: ReadonlyArray<TableRow>): string {
   }
   lines.push(
     "",
-    "n = statement/question の区間数（within8s・meaning・criticalFactErrors の分母。未訳を含む）。criticalFactErrors は number/time/amount/negation/place/condition/subject の wrong、factErrorsByType は型ごとの wrong（proper_noun・tense を含む）。lStart の p50/p95（最近傍順位法）/max は backchannel 以外で訳が対応した区間の値。複数 run の行は区間を合算し、firstAudioOutMs・queue.maxMs は run ごとの最大値、over2000Count・costUsd は合計（≥ は費用不明の run を含む）。",
+    "n = statement/question の区間数（within8s・meaning・criticalFactErrors の分母。未訳を含む）。criticalFactErrors は number/time/amount/negation/place/legal_right/condition/subject/tense の wrong、factErrorsByType は型ごとの wrong（proper_noun を含む）。lStart の p50/p95（最近傍順位法）/max は backchannel 以外で訳が対応した区間の値。複数 run の行は区間を合算し、firstAudioOutMs・queue.maxMs は run ごとの最大値、over2000Count・costUsd は合計（≥ は費用不明の run を含む）。",
   );
   return `${lines.join("\n")}\n`;
 }

@@ -136,7 +136,7 @@ describe("reference stats", () => {
       windowSec: 60,
       segments: 3,
       kinds: { statement: 1, question: 1, backchannel: 1, fragment: 0 },
-      facts: { number: 0, time: 1, amount: 0, negation: 0, place: 1, proper_noun: 0, condition: 0, subject: 0, tense: 0 },
+      facts: { number: 0, time: 1, amount: 0, negation: 0, place: 1, legal_right: 0, proper_noun: 0, condition: 0, subject: 0, tense: 0 },
       uncertain: 1,
       coveredSec: 5.2,
     });

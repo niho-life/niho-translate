@@ -6,7 +6,7 @@ import type { FactVerdict, JudgeFlag, ReferenceSegment } from "../engine.ts";
 import { FACT_VERDICTS, JUDGE_FLAGS } from "./metrics.ts";
 import type { BatchPlan, EnSentence, OutputWord, RawSegmentJudgement } from "./types.ts";
 
-export const DEFAULT_PROMPT_VERSION = "v1";
+export const DEFAULT_PROMPT_VERSION = "v2";
 export const CONTEXT_SEGMENTS = 3;
 /** 対象区間の開始より前に見せる英語（正解原稿の時刻誤差ぶん）。 */
 export const WINDOW_BEFORE_MS = 2_000;
@@ -63,7 +63,13 @@ NOTE: one short sentence in Japanese (at most 80 characters) explaining the scor
 
 Return exactly one item per JUDGE segment, in the given order, using the given ids.`;
 
-const PROMPTS: Readonly<Record<string, string>> = { v1: JUDGE_INSTRUCTIONS_V1 };
+const JUDGE_INSTRUCTIONS_V2 = JUDGE_INSTRUCTIONS_V1
+  .replace("place (place names), proper_noun", "place (place names), legal_right (property ownership or leasehold rights), proper_noun")
+  .replace("condition, subject or place name caps the score at 1", "condition, subject, legal right or place name caps the score at 1")
+  .replace("different value, polarity, subject, condition, time, place or name", "different value, polarity, subject, condition, time, place, legal right or name")
+  .replace('鎌倉 → "Kyoto"). A place fact', '鎌倉 → "Kyoto"; 所有権 → "for sale"). A place fact')
+  .replace("(逗子 = Zushi).", "(逗子 = Zushi). Freehold ownership and leasehold are distinct legal rights.");
+const PROMPTS: Readonly<Record<string, string>> = { v1: JUDGE_INSTRUCTIONS_V1, v2: JUDGE_INSTRUCTIONS_V2 };
 
 export function judgeInstructions(version: string): string {
   const text = PROMPTS[version];

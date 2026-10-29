@@ -106,7 +106,7 @@ export function renderReport(ctx: ReportContext): string {
     latencyLine("lTail", a.lTail),
     `| meaning 平均（分布 0/1/2/3） | ${a.meaningMean === null ? "—" : a.meaningMean.toFixed(2)}（${a.meaningDist["0"]}/${a.meaningDist["1"]}/${a.meaningDist["2"]}/${a.meaningDist["3"]}） |`,
     `| facts ok / wrong / omitted / unclear | ${a.factTotals.ok} / ${a.factTotals.wrong} / ${a.factTotals.omitted} / ${a.factTotals.unclear} |`,
-    `| 重大誤り（数・時刻・金額・否定・地名・条件・主体の wrong） | ${a.criticalFactErrors} |`,
+    `| 重大誤り（数・時刻・金額・否定・地名・権利・条件・主体・時制の wrong） | ${a.criticalFactErrors} |`,
     `| 型ごとの wrong | ${byType || "なし"} |`,
     `| flags | ${flags || "なし"} |`,
     "",

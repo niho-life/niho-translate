@@ -4,6 +4,8 @@
 
 目的: 同じ日本語音声を実時間で複数の通訳エンジンへ流し、**意味対応する英語音声の開始遅延**と**意味精度**を同じ正解原稿・同じ判定器で比較する。オーナー基準は「発話開始→対応する英語音声の開始が概ね5秒、最大8秒」「日本語の文意が伝わる英語」。
 
+合成音声での金額・権利・後置否定の追試結果は[PC評価](../../docs/pc-golden-fact-evaluation-2026-10-30.md)。権利を重大事実へ追加した判定指示は`v2`で、旧`v1`のrunと同一基準として集計しない。
+
 このディレクトリは公開リポジトリの一部である。**音声・原文・訳文・実データのpath・APIキーをここに置かない。** 実データと実行結果は `EVAL_PRIVATE_DIR`（Git管理外の私有フォルダ）にだけ書く。
 
 ## 1. 構成と担当
@@ -71,7 +73,7 @@ Qwenを再試験する場合: [公式無料枠ガイド](https://www.alibabaclou
 
 - 時刻は whisper-1（`response_format=verbose_json`, `timestamp_granularities[]=word,segment`, `language=ja`）の単語時刻から。`gpt-4o-transcribe-diarize` の区間と話者ラベルで話者を補う。ローカル `whisper-cli`（large-v3-turbo）を第 3 の照合に使ってよい。
 - 本文は ASR 出力を、録音に付属する既存の文字起こし（オーナー提供・人手未校正）と照合して直す。3 系統が食い違う箇所は `uncertain: true`。
-- `facts` は数・期間・金額・時刻・否定・地名（`place`）・その他の固有名詞（`proper_noun`）・条件・主体・時制を、原文の表記で列挙する（判定器が各 fact の保存を採点する）。地名は人名・社名と分け、`place` にする。
+- `facts` は数・期間・金額・時刻・否定・地名（`place`）・不動産の権利形態（`legal_right`）・その他の固有名詞（`proper_noun`）・条件・主体・時制を、原文の表記で列挙する（判定器が各 fact の保存を採点する）。所有権・賃借権は取引の説明と異なる重大事実として`legal_right`へ、地名は人名・社名と分けて`place`にする。
 - 原稿作成に LLM（既定 `anthropic:claude-opus-5-5`〔Anthropic API、`--reasoning` は effort に写す〕。`--llm gpt-5.4` で OpenAI）を使ってよいが、本文を公開物へ出さない。2026-10-28 までの原稿は gpt-5.4 で作ったもので、Claude は区間を細かく切るので同じ窓で混ぜない。
 - 第 4 系統 D は `--turn-transcript <abs.md>`（`[hh:mm:ss] 話者N: 本文`、window の前後を含んでよい。本文一致で window 内を抜き出す）。既定は録音付属の人手未校正転記。`--transcript-kind gemini` を付けると Gemini（Vertex AI）の文字起こしとして扱い、A〜C の 2 系統以上が一致する場合を除き D の語を優先する（whisper 系の聞き違いを別系統で正すため）。
 
@@ -80,7 +82,7 @@ Qwenを再試験する場合: [公式無料枠ガイド](https://www.alibabaclou
 1. `output-timeline.wav` を whisper-1（`language=en`, word timestamps）で文字起こしし、各英単語に **t（ms）** を付ける。ファイル内時刻 = t なので変換不要。`--asr-backend local` ではローカル `whisper-cli` と明示したモデルを使い、API 課金を避ける。ローカルの語は `output-words-local.json` に分けて保存し、既存の `output-words.json` を上書きしない。
 2. LLM 判定器（既定は Claude `claude-opus-5-5`・effort `high`〔`--judge-backend anthropic`、Anthropic API〕。`--judge-backend openai` で gpt-5.4、`agy` で Antigravity CLI 経由の Claude、`codex` で ChatGPT ログイン済み Codex app-server のテキスト判定。`--model` で変更可）に、正解区間（id, startMs, endMs, text, facts）と英語の文（単語時刻付き）を渡し、区間ごとに `JudgedSegment` を返させる（JSON schema で強制）。1 回の呼び出しは 15 区間程度に分け、前後の区間を文脈として渡す。
 3. 指標: `lStartMs = enStartMs − startMs`、`lEndMs = enStartMs − endMs`、`lTailMs = enEndMs − endMs`。`enStartMs` は **その区間の意味を担う最初の英単語**の時刻（導入の無関係語・前区間の残りは含めない）。`backchannel` は遅延統計から除外、`aligned=false`（訳が無い）は欠落として `meaning=0`、遅延は null にして件数を分母に残す。
-4. `critical fact error` = type が `CRITICAL_FACT_TYPES`（number/time/amount/negation/place/subject/condition/tense）の fact で verdict `wrong`。将来予定を過去の実績に変える誤りも重大として数える。`omitted` は別に数え、型ごとの wrong 件数を `factErrorsByType` に残す。2026-10-30以前の集計とは定義が異なるため、比較時は保存済み判定から再集計する。
+4. `critical fact error` = type が `CRITICAL_FACT_TYPES`（number/time/amount/negation/place/legal_right/subject/condition/tense）の fact で verdict `wrong`。将来予定を過去の実績に変える誤りや、所有権を単なる売却・賃貸の説明にする誤りも重大として数える。`omitted` は別に数え、型ごとの wrong 件数を `factErrorsByType` に残す。旧原稿で権利を`proper_noun`とした判定は自動的に重大件数へ移らないため、再注釈・再判定が必要。
    - whisper-1 は長い無音で幻聴（"Thank you for watching." 等）を出すため、判定器は `output-timeline.wav` をエネルギーで有声区間に分けて区間ごとに文字起こしし、区間の開始を足して時刻を戻す（無音は送らない）。prompt にはエンジン字幕から抜いた数字・固有名詞などのキーワードだけを渡す（字幕の文を渡すと whisper がその内容を飛ばした）。
    - ASR 語とエンジン字幕の一致率（`asrAgreement`、全体と 1 分ごと）を記録し、60% 未満の分は gpt-4o-transcribe で再確認して report.md に「エンジンの音声が字幕と違う」か「判定不能」かを記す。一致率が低い分は、聞き手に字幕と違う英語が流れた候補として扱う。
    - `--effort`（判定モデルの推論の深さ）は `judge.effort` に記録する。

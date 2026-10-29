@@ -290,7 +290,7 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 |---:|---|---|
 | 1 | 話者別の連続音声入力、原文・訳文字幕、再生待ちの上限、内容を残さない診断 | 実装済み。入力の無音は継続送信される。出力側だけデジタル無音を短縮する。iPhoneとイヤフォンの実測は未了 |
 | 2 | 長い会話での遅延蓄積を見える化 | このPRで研究レポートに**原文開始時刻で区切った1分ごとの**意味平均、`L_start` p50/p95、8秒以内率、未対応、重大事実誤りを追加。未対応は8秒以内率と意味平均の分母に残す |
-| 3 | 同一条件の既製API比較 | 合成の日英対話・地名/数字/否定/質問を用い、5分以上×複数録音×反復で `gpt-live-1`、DeepL Voice、Qwen、利用可能ならElevenLabsを比較。音声時刻で `L_start`/`L_fact`、終了時刻・再生待ち、用語適用率を採る。各APIの費用・データ保持・利用可能地域も記録。Qwenの研究用adapterは追加済み（APIキー未設定のため実疎通未了） |
+| 3 | 同一条件の既製API比較 | 合成の日英対話・地名/数字/否定/質問を用い、5分以上×複数録音×反復で `gpt-live-1`、DeepL Voice、Qwen、利用可能ならElevenLabsを比較。音声時刻で `L_start`/`L_fact`、終了時刻・再生待ち、用語適用率を採る。各APIの費用・データ保持・利用可能地域も記録。Qwen研究用adapterの実サービス疎通と公開音声5分評価は完了。再生待ちが最大12.34秒で製品採用は保留 |
 | 4 | 背景・用語・訳出タイミングの調整 | 既存の背景promptは私有対談3組で意味中央値2.35→2.58/3だったが、`L_start` p95は10.54→11.65秒と悪化。単一の成功窓で製品既定を変えない。用語指定や`eagerness`も独立録音で重大誤り・p95・聞き取りを並べる |
 | 5 | 独自の部分ASR→分割翻訳→TTS | 既製の単一セッションAPIで意味と耳到達の両方を満たせない場合だけ試作。訳音声の後からの訂正不可、文末の否定、三段の障害・費用を受入条件に入れる |
 
@@ -302,6 +302,6 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 
 - [Qwenチームの発表](https://qwen.ai/blog?id=qwen3.8-livetranslate)と[Model Studioの仕様](https://docs.modelstudio.console.alibabacloud.com/ja/model-studio/qwen3-5-livetranslate-flash-realtime)では、日本語を入力音声として、英語を訳音声として扱える。原文字幕はQwen3.8で常時有効、用語は`session.translation.corpus.phrases`へ設定できる。したがって**日→英の実験候補として妥当**。
 - QwenチームはFLEURSの70言語方向を評価したと発表するが、公開本文に日→英単独の数値、会話5分の結果、NIHOの「発話開始→対応する英語音声開始」と同じ遅延指標は示されていない。[Tencent Hunyuanの比較](https://github.com/Tencent-Hunyuan/Hy-SimulMT)は中国語↔英語を対象としており、日→英の裏付けには使えない。**現行GPT-Liveより日本語で高精度・高速とは未証明**。
-- [Model Studio価格表](https://www.alibabacloud.com/help/en/model-studio/model-pricing)はシンガポールの`qwen3.8-livetranslate-flash-realtime`に新規利用者向け100万トークンを掲示する。[無料枠の条件](https://www.alibabacloud.com/help/en/model-studio/new-free-quota)は90日、シンガポール限定で、枠消費後は従量課金へ自動移行する。試す場合はコンソールで残枠を確認し、課金を避けたいなら**Free Quota Onlyを先に有効化**する。アカウント情報の登録は必要。現在のオーナーのアカウントで新規枠を受け取れるかは未確認。
-- APIキー・workspace IDの取得ができたら、最初は合成音声で接続契約を検証し、次に使用許諾が明確な公開の日→英音声を5分以上、複数本、反復で流す。`gpt-live-1`と同じ正解原稿で意味、数字・否定・地名、原文ASR、`L_start` p50/p95、8秒以内率、5分後半の遅延蓄積、費用を比較する。hotwordあり/なしは別試験。**私有の不動産対談をAlibabaへ送る許可は得ていない**。
-- このPRのQwenアダプターは製品経路に未接続。APIキーがないため実サービスとの疎通と日→英の性能は未測定。現在の製品既定は比較結果が揃うまで変えない。
+- [Model Studio価格表](https://www.alibabacloud.com/help/en/model-studio/model-pricing)はシンガポールの`qwen3.8-livetranslate-flash-realtime`に新規利用者向け100万トークンを掲示する。[無料枠の条件](https://www.alibabacloud.com/help/en/model-studio/new-free-quota)は90日、シンガポール限定。オーナーのコンソールで対象モデルの100万トークン残枠と超過時停止の有効化を確認した。研究用APIキーは同モデルだけに制限し、Git管理外で保管する。料金画面の反映には遅延があり得るため、実際の請求額は後日も確認する。
+- 公開J-WAVEの同一5分窓では、Qwenの意味平均2.51/3、`L_start` p50 9.26秒・p95 13.65秒、8秒以内33%、再生待ち最大12.34秒。GPT-Live標準はそれぞれ2.69/3、7.94秒・13.52秒、49%、0.39秒。別の公開会見5分ではQwenが速い（p50 5.39秒、8秒以内96%）反面、意味2.21/3・欠落5件・再生待ち最大5.66秒。GPT-Liveは遅い（p50 10.20秒、8秒以内32%）が意味2.86/3・欠落0件だった。両方とも同じローカル音声認識と判定器で訳音声を採点した。詳しくは[連続音声の評価記録](public-audio-software-evaluation-2026-10-29.md)。各録音1runで優劣を確定しない。
+- 次は独立の公開録音、用語hotwordの有無、必要なら別の話者検出設定で再現性を調べる。**私有の不動産対談をAlibabaへ送る許可は得ていない**。研究用アダプターは製品経路に未接続で、現在の製品既定は変えない。

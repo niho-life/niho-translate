@@ -20,6 +20,7 @@ export interface QwenOptions {
   readonly workspace: string;
   readonly region: "singapore" | "beijing";
   readonly hotwords: Readonly<Record<string, string>>;
+  readonly turnDetection: "speaker" | "server-vad";
 }
 
 export function parseQwenOptions(options: Readonly<Record<string, string>>, env: NodeJS.ProcessEnv = process.env): QwenOptions {
@@ -27,6 +28,7 @@ export function parseQwenOptions(options: Readonly<Record<string, string>>, env:
   const resolved = resolveOptions(options, {
     region: { default: "singapore", values: ["singapore", "beijing"] },
     hotwords: { default: "off", values: ["off", "env"] },
+    turnDetection: { default: "speaker", values: ["speaker", "server-vad"] },
   });
   if (!workspace || !/^[A-Za-z0-9][A-Za-z0-9-]{2,79}$/u.test(workspace)) throw new EngineError("QWEN_WORKSPACE_ID_MISSING_OR_INVALID");
   const hotwords: Record<string, string> = Object.create(null) as Record<string, string>;
@@ -44,7 +46,8 @@ export function parseQwenOptions(options: Readonly<Record<string, string>>, env:
       hotwords[source] = target;
     }
   }
-  return { workspace, region: resolved.region as QwenOptions["region"], hotwords };
+  return { workspace, region: resolved.region as QwenOptions["region"], hotwords,
+    turnDetection: resolved.turnDetection as QwenOptions["turnDetection"] };
 }
 
 export function qwenUrl(settings: QwenOptions): string {
@@ -57,7 +60,9 @@ export function qwenSessionUpdate(config: EngineConfig, settings: QwenOptions): 
     type: "session.update",
     session: {
       output_modalities: ["text", "audio"],
-      audio: { input: { turn_detection: { type: "speaker_detection", threshold: 0.5 } } },
+      audio: { input: { turn_detection: settings.turnDetection === "speaker"
+        ? { type: "speaker_detection", threshold: 0.5 }
+        : { type: "server_vad" } } },
       translation: {
         language: config.targetLanguage,
         ...(Object.keys(settings.hotwords).length ? { corpus: { phrases: settings.hotwords } } : {}),

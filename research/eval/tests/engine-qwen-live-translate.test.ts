@@ -23,6 +23,10 @@ describe("Qwen LiveTranslate contract", () => {
         translation: { language: "en", corpus: { phrases: { 鎌倉: "Kamakura", 湘南: "Shonan" } } },
       },
     });
+    const vad = parseQwenOptions({ turnDetection: "server-vad" }, { QWEN_WORKSPACE_ID: "ws-test123" });
+    expect(qwenSessionUpdate(CONFIG, vad)).toMatchObject({
+      session: { audio: { input: { turn_detection: { type: "server_vad" } } } },
+    });
     expect(qwenUrl(parseQwenOptions({ region: "beijing" }, { QWEN_WORKSPACE_ID: "ws-test123" })))
       .toContain("ws-test123.cn-beijing.maas.aliyuncs.com");
   });
@@ -30,6 +34,7 @@ describe("Qwen LiveTranslate contract", () => {
   it("rejects malformed workspace and hotwords before opening a billable session", () => {
     expect(() => parseQwenOptions({}, {})).toThrow();
     expect(() => parseQwenOptions({ region: "other" }, { QWEN_WORKSPACE_ID: "ws-test123" })).toThrow();
+    expect(() => parseQwenOptions({ turnDetection: "manual" }, { QWEN_WORKSPACE_ID: "ws-test123" })).toThrow();
     expect(() => parseQwenOptions({}, { QWEN_WORKSPACE_ID: "bad.example.org" })).toThrow();
     expect(() => parseQwenOptions({ hotwords: "env" }, { QWEN_WORKSPACE_ID: "ws-test123" })).toThrow();
     expect(() => parseQwenOptions({ hotwords: "env" }, { QWEN_WORKSPACE_ID: "ws-test123", QWEN_HOTWORDS_JSON: "not json" })).toThrow();

@@ -49,6 +49,9 @@ export function parseLiveOptions(options: Readonly<Record<string, string>>): Liv
     voice: { default: "marin", pattern: VOICE_PATTERN },
     contextFile: {},
   });
+  if (resolved.preset === "official-short" && resolved.contextFile !== undefined) {
+    throw new EngineError("INVALID_OPTION", "contextFile");
+  }
   let context: string | null = null;
   if (resolved.contextFile !== undefined) {
     if (!isAbsolute(resolved.contextFile)) throw new EngineError("INVALID_OPTION", "contextFile");

@@ -162,6 +162,7 @@ describe("openai-live session.start", () => {
       expect(session.instructions).toContain("Background to disambiguate terms only: Two people discuss property visits in Kamakura.");
       expect(session.instructions).toContain("Do not add any fact from the background unless it is spoken in the audio.");
       expect(() => parseLiveOptions({ contextFile: "relative.txt" })).toThrow("INVALID_OPTION");
+      expect(() => parseLiveOptions({ preset: "official-short", contextFile: path })).toThrow("INVALID_OPTION");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

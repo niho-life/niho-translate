@@ -423,7 +423,8 @@ export async function runHarness(argv: ReadonlyArray<string>, env: NodeJS.Proces
   let engine: Engine;
   try {
     // option の検査はここで（接続より前）。
-    engine = factory(config, recorder, { openaiApiKey: apiKey });
+    const googleAccessToken = (env.GOOGLE_ACCESS_TOKEN ?? "").trim();
+    engine = factory(config, recorder, { openaiApiKey: apiKey, ...(googleAccessToken ? { googleAccessToken } : {}) });
   } catch (error) {
     if (error instanceof EngineError || error instanceof HarnessError) throw error;
     throw new HarnessError("ENGINE_CONFIG_INVALID");

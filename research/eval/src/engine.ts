@@ -7,7 +7,7 @@
 export type Language = "ja" | "en";
 
 export interface EngineConfig {
-  /** "openai-translate" | "openai-live" | "openai-realtime" | "cascade" */
+  /** "openai-translate" | "openai-live" | "openai-realtime" | "cascade" | "gemini-live-translate" */
   readonly engineId: string;
   readonly sourceLanguage: Language;
   readonly targetLanguage: Language;
@@ -19,6 +19,8 @@ export interface EngineConfig {
 
 export interface EngineSecrets {
   readonly openaiApiKey: string;
+  /** Vertex AI（Gemini Live）のアクセストークン。gemini-* エンジンだけが使う。 */
+  readonly googleAccessToken?: string;
 }
 
 export interface TranscriptMeta {

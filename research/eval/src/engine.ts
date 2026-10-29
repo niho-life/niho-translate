@@ -115,7 +115,7 @@ export interface RunSummary {
 /** 正解原稿（private）。startMs/endMs は window 先頭からの ms。 */
 export type FactType = "number" | "time" | "amount" | "negation" | "place" | "proper_noun" | "condition" | "subject" | "tense";
 /** 重大誤訳として数える fact の型（調査文書 §6: 否定・条件・金額・日付・主体・地名）。 */
-export const CRITICAL_FACT_TYPES: ReadonlyArray<FactType> = ["number", "time", "amount", "negation", "place", "condition", "subject"];
+export const CRITICAL_FACT_TYPES: ReadonlyArray<FactType> = ["number", "time", "amount", "negation", "place", "condition", "subject", "tense"];
 export interface ReferenceFact { readonly type: FactType; readonly text: string; readonly note?: string }
 export interface ReferenceSegment {
   readonly id: string;

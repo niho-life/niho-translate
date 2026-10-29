@@ -176,12 +176,12 @@ describe("aggregate", () => {
   });
 
   it("counts only the contract's critical fact types (including place) as critical", () => {
-    expect([...CRITICAL_FACT_TYPES].sort()).toEqual(["amount", "condition", "negation", "number", "place", "subject", "time"]);
+    expect([...CRITICAL_FACT_TYPES].sort()).toEqual(["amount", "condition", "negation", "number", "place", "subject", "tense", "time"]);
     for (const type of CRITICAL_FACT_TYPES) {
       expect(isCriticalFactError({ type, verdict: "wrong" })).toBe(true);
       expect(isCriticalFactError({ type, verdict: "omitted" })).toBe(false);
     }
     expect(isCriticalFactError({ type: "proper_noun", verdict: "wrong" })).toBe(false);
-    expect(isCriticalFactError({ type: "tense", verdict: "wrong" })).toBe(false);
+    expect(isCriticalFactError({ type: "tense", verdict: "wrong" })).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ import {
   promptForRange,
   promptKeywords,
   subtitleTokens,
+  subtitleWords,
   type TimedToken,
 } from "../src/judge/transcript.ts";
 
@@ -37,6 +38,13 @@ describe("parseTranscript / tokens", () => {
     expect(tokens.map((t) => t.token)).toEqual(["the", "viewing", "is", "off", "tomorrow", "kamakura", "is", "close", "very", "close"]);
     expect(tokens.find((t) => t.token === "kamakura")?.t).toBe(9000);
     expect(tokens.find((t) => t.token === "very")?.t).toBe(9400);
+  });
+
+  it("derives a subtitle-arrival word timeline without an audio API call", () => {
+    const words = subtitleWords(parseTranscript(transcript));
+    expect(words.find((w) => w.text === "Kamakura")?.startMs).toBe(9000);
+    expect(words.find((w) => w.text === "tomorrow.")?.startMs).toBe(2000);
+    expect(words.map((w) => w.i)).toEqual(words.map((_, i) => i));
   });
 
   it("normalizes case, apostrophes and dashes", () => {

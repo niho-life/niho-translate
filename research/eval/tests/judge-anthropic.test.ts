@@ -68,3 +68,20 @@ describe("parseJudgeArgs with --judge-backend anthropic", () => {
     expect(() => parseJudgeArgs(["--run", "/tmp/run", "--reference", "/tmp/ref.json", "--judge-backend", "gemini"])).toThrow(/--judge-backend/);
   });
 });
+
+describe("Codex subscription judge options", () => {
+  const base = ["--run", "/tmp/run", "--reference", "/tmp/ref.json", "--judge-backend", "codex"];
+
+  it("defaults to a ChatGPT-authenticated model and audio timing", () => {
+    const args = parseJudgeArgs(base);
+    expect(args.model).toBe("gpt-6-astra");
+    expect(args.wordSource).toBe("audio");
+    expect(args.batch).toBe(8);
+  });
+
+  it("accepts an explicitly approximate subtitle timeline", () => {
+    expect(parseJudgeArgs([...base, "--word-source", "subtitle"]).wordSource).toBe("subtitle");
+    expect(() => parseJudgeArgs([...base, "--word-source", "invalid"])).toThrow(/word-source/);
+    expect(() => parseJudgeArgs([...base, "--effort", "high"])).toThrow(/effort/);
+  });
+});

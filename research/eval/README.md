@@ -73,7 +73,7 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 ## 6. 判定（agent D、run ディレクトリ内に `output-words.json`, `judgement.json`, `report.md`）
 
 1. `output-timeline.wav` を whisper-1（`language=en`, word timestamps）で文字起こしし、各英単語に **t（ms）** を付ける。ファイル内時刻 = t なので変換不要。
-2. LLM 判定器（既定は Claude `claude-opus-5-5`・effort `high`〔`--judge-backend anthropic`、Anthropic API〕。`--judge-backend openai` で gpt-5.4、`agy` で Antigravity CLI 経由の Claude。`--model` で変更可）に、正解区間（id, startMs, endMs, text, facts）と英語の文（単語時刻付き）を渡し、区間ごとに `JudgedSegment` を返させる（JSON schema で強制）。1 回の呼び出しは 15 区間程度に分け、前後の区間を文脈として渡す。
+2. LLM 判定器（既定は Claude `claude-opus-5-5`・effort `high`〔`--judge-backend anthropic`、Anthropic API〕。`--judge-backend openai` で gpt-5.4、`agy` で Antigravity CLI 経由の Claude、`codex` で ChatGPT ログイン済み Codex app-server のテキスト判定。`--model` で変更可）に、正解区間（id, startMs, endMs, text, facts）と英語の文（単語時刻付き）を渡し、区間ごとに `JudgedSegment` を返させる（JSON schema で強制）。1 回の呼び出しは 15 区間程度に分け、前後の区間を文脈として渡す。
 3. 指標: `lStartMs = enStartMs − startMs`、`lEndMs = enStartMs − endMs`、`lTailMs = enEndMs − endMs`。`enStartMs` は **その区間の意味を担う最初の英単語**の時刻（導入の無関係語・前区間の残りは含めない）。`backchannel` は遅延統計から除外、`aligned=false`（訳が無い）は欠落として `meaning=0`、遅延は null にして件数を分母に残す。
 4. `critical fact error` = type が `CRITICAL_FACT_TYPES`（number/time/amount/negation/place/subject/condition）の fact で verdict `wrong`。`omitted` は別に数え、型ごとの wrong 件数を `factErrorsByType` に残す。
    - whisper-1 は長い無音で幻聴（"Thank you for watching." 等）を出すため、判定器は `output-timeline.wav` をエネルギーで有声区間に分けて区間ごとに文字起こしし、区間の開始を足して時刻を戻す（無音は送らない）。prompt にはエンジン字幕から抜いた数字・固有名詞などのキーワードだけを渡す（字幕の文を渡すと whisper がその内容を飛ばした）。
@@ -95,8 +95,14 @@ npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id sr
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json"
 # 既定の判定器は Claude（ANTHROPIC_API_KEY）。gpt-5.4 で判定するなら --judge-backend openai。--skip-asr で既存の output-words.json を再利用する
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json" --judge-backend openai --skip-asr --out-name judgement-gpt54.json
+# 既存の output-words.json を再利用し、LLM 判定だけ ChatGPT 契約枠で実行する
+npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json" --judge-backend codex --skip-asr --out-name judgement-codex.json
+# ASR を呼ばず、字幕到着時刻で意味だけを安価に下見する。音声の遅延値には使わない
+npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json" --judge-backend codex --word-source subtitle --out-name judgement-codex-subtitle.json
 npm --silent run eval:aggregate -- --runs "$EVAL_PRIVATE_DIR"/runs/*
 ```
+
+`codex` はローカル CLI の ChatGPT ログインを使う。子プロセスには API key を渡さない。音声の入力・文字起こし・Realtime 音声出力は Codex app-server の対象外なので、通訳エンジンの5分間リプレイそのものは代替できない。`--skip-asr` は **既存の v2 `output-words.json` が無ければ失敗し、OpenAI ASR を呼ばない**。API 課金を避ける場合は `--word-source subtitle` を指定する。この場合の `lStart` は英語字幕の到着時刻を使った代理値で、英語発話開始の実測値ではない。音声と字幕の不一致も検出できない。Codex 判定は OpenAI 系統の自己評価バイアスがあるため、採用判断は別系統の判定または人手確認と合わせる。
 
 `npm run typecheck` と `npm test`（vitest、純関数のみ。外部 API・実音声を使わない）を通す。実 API を使う検証は `EVAL_PRIVATE_DIR` 配下だけに書き、結果の数値だけを報告する。
 

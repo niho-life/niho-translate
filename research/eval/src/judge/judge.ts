@@ -1,6 +1,7 @@
 /**
  * 判定 CLI（agent D）。
- *   --run <runDir> --reference <abs json> [--judge-backend openai|agy|anthropic] [--model <id>] [--skip-asr]
+ *   --run <runDir> --reference <abs json> [--judge-backend openai|agy|anthropic|codex] [--model <id>] [--skip-asr]
+ *   [--word-source audio|subtitle]
  *   [--batch 15（agy は 8）] [--prompt-version v1] [--effort medium] [--out-name judgement.json]
  * --model の既定は openai なら gpt-5.4、agy なら claude-opus-4-6-thinking、anthropic なら claude-opus-5-5
  *（judge.model は "agy:<id>" / "anthropic:<id>"）。anthropic は Anthropic API を直接呼ぶ第二審判（鍵は ANTHROPIC_API_KEY）。
@@ -13,6 +14,7 @@ import type { JudgeDocument, JudgedSegment, ReferenceSegment } from "../engine.t
 import { isCurrentOutputWords, parseOutputWords, transcribeTimeline } from "./asr.ts";
 import { AGY_DEFAULT_MODEL, AGY_EFFORTS, agyPrompt, isAgyQuotaError, runAgy, type AgySchemaMode } from "./agy.ts";
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORTS, createAnthropicJsonResponse } from "./anthropic.ts";
+import { runCodexJudge } from "./codex.ts";
 import { outputNames, parseReference, readBytes, readJson, readJsonIfExists, readRunMeta, readTextIfExists, writeText, type RunMeta } from "./files.ts";
 import { computeAggregate, resolveSegment } from "./metrics.ts";
 import { createJsonResponse, redactSecrets, supportsReasoning, type Usage } from "./openai.ts";
@@ -29,11 +31,11 @@ import {
 } from "./prompt.ts";
 import { renderReport } from "./report.ts";
 import { groupSentences } from "./sentences.ts";
-import { parseTranscript } from "./transcript.ts";
+import { parseTranscript, subtitleWords } from "./transcript.ts";
 import type { BatchPlan, EnSentence, OutputWord, OutputWordsDocument, RawSegmentJudgement } from "./types.ts";
 import { parseWav } from "./wav.ts";
 
-export type JudgeBackend = "openai" | "agy" | "anthropic";
+export type JudgeBackend = "openai" | "agy" | "anthropic" | "codex";
 
 export interface JudgeArgs {
   readonly runDir: string;
@@ -43,6 +45,8 @@ export interface JudgeArgs {
   readonly outName: string;
   readonly model: string;
   readonly skipAsr: boolean;
+  /** subtitle はエンジン字幕到着時刻を用いる安価な暫定判定。音声開始の遅延ではない。 */
+  readonly wordSource: "audio" | "subtitle";
   readonly batch: number;
   readonly promptVersion: string;
   /** openai は既定 medium、anthropic は既定 high。agy はモデルごとに対応が違うので、明示したときだけ渡す（null = 渡さない）。 */
@@ -54,7 +58,7 @@ export interface JudgeArgs {
 const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const OPENAI_DEFAULT_MODEL = "gpt-5.4";
 /** agy は 1 回 10〜60 秒かかり、並列は 2 まで。 */
-const CONCURRENCY: Readonly<Record<JudgeBackend, number>> = { openai: 3, agy: 2, anthropic: 3 };
+const CONCURRENCY: Readonly<Record<JudgeBackend, number>> = { openai: 3, agy: 2, anthropic: 3, codex: 1 };
 /** 出力が溜まった run では、最大 queue より後ろまで英語を見せる。 */
 const QUEUE_MARGIN_MS = 15_000;
 
@@ -67,7 +71,7 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
       skipAsr = true;
       continue;
     }
-    if (!flag || !["--run", "--reference", "--judge-backend", "--model", "--batch", "--prompt-version", "--effort", "--out-name", "--agy-schema"].includes(flag)) {
+    if (!flag || !["--run", "--reference", "--judge-backend", "--model", "--batch", "--prompt-version", "--effort", "--out-name", "--agy-schema", "--word-source"].includes(flag)) {
       throw new Error(`unknown argument: ${flag ?? ""}`);
     }
     const value = argv[k + 1];
@@ -81,15 +85,18 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   if (!runDir) throw new Error("--run <runDir> is required");
   if (!referencePath || !isAbsolute(referencePath)) throw new Error("--reference <absolute json path> is required");
   const backend = values.get("--judge-backend") ?? "anthropic";
-  if (backend !== "openai" && backend !== "agy" && backend !== "anthropic") throw new Error("--judge-backend must be openai, agy or anthropic");
+  if (backend !== "openai" && backend !== "agy" && backend !== "anthropic" && backend !== "codex") throw new Error("--judge-backend must be openai, agy, anthropic or codex");
   // agy は 1 回の応答が長いと時間上限に掛かるので、既定の区間数を小さくする
-  const batch = Number(values.get("--batch") ?? (backend === "agy" ? "8" : "15"));
+  const batch = Number(values.get("--batch") ?? (backend === "agy" || backend === "codex" ? "8" : "15"));
   if (!Number.isInteger(batch) || batch < 1 || batch > 50) throw new Error("--batch must be an integer in 1..50");
-  const effort = values.get("--effort") ?? (backend === "agy" ? null : backend === "anthropic" ? "high" : "medium");
+  const effort = values.get("--effort") ?? (backend === "agy" || backend === "codex" ? null : backend === "anthropic" ? "high" : "medium");
+  if (backend === "codex" && effort !== null) throw new Error("--effort is not supported for codex app-server");
   const allowed = backend === "agy" ? AGY_EFFORTS : backend === "anthropic" ? ANTHROPIC_EFFORTS : EFFORTS;
   if (effort !== null && !allowed.has(effort)) throw new Error(`--effort must be one of ${[...allowed].join(", ")} for ${backend}`);
   const outName = values.get("--out-name") ?? "judgement.json";
   outputNames(outName);
+  const wordSource = values.get("--word-source") ?? "audio";
+  if (wordSource !== "audio" && wordSource !== "subtitle") throw new Error("--word-source must be audio or subtitle");
   // enforce が既定: prompt モードは 1 回で済むが、実測で壊れた JSON を返した
   const agySchema = values.get("--agy-schema") ?? "enforce";
   if (agySchema !== "prompt" && agySchema !== "enforce") throw new Error("--agy-schema must be prompt or enforce");
@@ -98,8 +105,9 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
     referencePath,
     backend,
     outName,
-    model: values.get("--model") ?? (backend === "agy" ? AGY_DEFAULT_MODEL : backend === "anthropic" ? ANTHROPIC_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL),
+    model: values.get("--model") ?? (backend === "agy" ? AGY_DEFAULT_MODEL : backend === "anthropic" ? ANTHROPIC_DEFAULT_MODEL : backend === "codex" ? "gpt-6-astra" : OPENAI_DEFAULT_MODEL),
     skipAsr,
+    wordSource,
     batch,
     promptVersion: values.get("--prompt-version") ?? DEFAULT_PROMPT_VERSION,
     effort,
@@ -179,6 +187,9 @@ async function callJudge(
       ...(ctx.args.effort ? { effort: ctx.args.effort } : {}),
     });
   }
+  if (ctx.args.backend === "codex") {
+    return runCodexJudge({ model: ctx.args.model, instructions: ctx.instructions, input, schema });
+  }
   return createJsonResponse({
     apiKey: ctx.apiKey,
     model: ctx.args.model,
@@ -229,13 +240,31 @@ async function judgeBatch(
   throw new Error("unreachable");
 }
 
-/** --skip-asr は現行版（v2）の output-words.json だけ再利用し、無い・古い場合は作り直す。 */
+/** --skip-asr は現行版（v2）の output-words.json だけ再利用し、無い・古い場合は課金を避けるため失敗させる。 */
 async function loadWords(args: JudgeArgs, apiKey: string | undefined, meta: RunMeta): Promise<OutputWordsDocument> {
+  if (args.wordSource === "subtitle") {
+    const transcript = await readTextIfExists(join(args.runDir, "output-transcript.txt"));
+    if (transcript === null) throw new Error("output-transcript.txt is required for --word-source subtitle");
+    const deltas = parseTranscript(transcript);
+    const words = subtitleWords(deltas);
+    if (words.length === 0) throw new Error("output-transcript.txt has no words");
+    return {
+      version: 2,
+      asr: { model: "engine-subtitle", language: "en", prompt: "none" },
+      audioMs: meta.windowEndSec === null || meta.windowStartSec === null ? 0 : Math.round((meta.windowEndSec - meta.windowStartSec) * 1000),
+      sentMs: 0,
+      thresholdDb: null,
+      regions: [],
+      droppedSilentWords: 0,
+      agreement: null,
+      words,
+    };
+  }
   const wordsPath = join(args.runDir, "output-words.json");
   if (args.skipAsr) {
     const existing = await readJsonIfExists(wordsPath);
     if (isCurrentOutputWords(existing)) return parseOutputWords(existing);
-    log("asr: output-words.json is missing or from an older version, regenerating");
+    throw new Error("--skip-asr requires an existing v2 output-words.json");
   }
   const transcript = await readTextIfExists(join(args.runDir, "output-transcript.txt"));
   const deltas = transcript === null ? null : parseTranscript(transcript);

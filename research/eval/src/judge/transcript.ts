@@ -47,6 +47,23 @@ export function subtitleTokens(deltas: ReadonlyArray<TranscriptDelta>): TimedTok
   return out;
 }
 
+/** エンジン字幕の到着時刻で作る暫定語列。音声の発話時刻とは異なる。 */
+export function subtitleWords(deltas: ReadonlyArray<TranscriptDelta>): OutputWord[] {
+  let joined = "";
+  const times: number[] = [];
+  for (const delta of deltas) {
+    joined += delta.text;
+    for (let i = 0; i < delta.text.length; i += 1) times.push(delta.t);
+  }
+  const words: OutputWord[] = [];
+  const wordPattern = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*[.,!?;:]*/gu;
+  for (const match of joined.matchAll(wordPattern)) {
+    const startMs = times[match.index ?? 0] ?? 0;
+    words.push({ i: words.length, text: match[0], startMs, endMs: startMs + 100 });
+  }
+  return words;
+}
+
 export function asrTokens(words: ReadonlyArray<OutputWord>): TimedToken[] {
   return words.flatMap((w) => normalizeTokens(w.text).map((token) => ({ token, t: w.startMs })));
 }

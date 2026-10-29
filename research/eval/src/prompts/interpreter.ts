@@ -1,8 +1,8 @@
 import { glossaryLines } from "./glossary.ts";
 import type { Language } from "../engine.ts";
 
-export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "domain-glossary-q";
-export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "domain-glossary-q"];
+export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "domain-glossary-q" | "compact-q" | "early-safe-q";
+export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "domain-glossary-q", "compact-q", "early-safe-q"];
 
 const LANGUAGE_NAME: Record<Language, string> = { ja: "Japanese", en: "English" };
 
@@ -34,6 +34,13 @@ export function buildInterpreterInstructions(preset: InterpreterPreset, source: 
   ];
   if (preset === "plain") return base.join("\n");
   if (preset === "plain-q") return [...base, ...twoParty].join("\n");
+  // Research-only variants. Keep the product presets unchanged until measured.
+  if (preset === "compact-q") return [...base, ...twoParty,
+    `Use concise, idiomatic spoken ${T}. Preserve every distinct claim, number, name, condition and negation. Shorten wording rather than removing facts; do not summarize the speaker.`
+  ].join("\n");
+  if (preset === "early-safe-q") return [...base, ...twoParty,
+    `Begin a translation from a stable subject or topic when it can be said without predicting the unseen predicate. Hold back claims whose verb, polarity, number or condition is not yet audible. Do not speak generic filler merely to start early.`
+  ].join("\n");
   const domain = [
     ``,
     `Context: a face-to-face conversation at a community space in Kamakura, Japan. Topics often include living in the Shonan area, local places, real estate (buying, renting, viewings, contracts), visas and moving to Japan, and everyday life. Speakers may tell long stories; keep the narrative order and the speaker's first-person voice.`,

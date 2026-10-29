@@ -125,7 +125,9 @@ export function renderReport(ctx: ReportContext): string {
   out.push("", "## ASR とエンジン字幕の一致率", "");
   const ag = ctx.words.agreement;
   if (!ag) {
-    out.push("エンジン字幕（output-transcript.txt）が無いため算出なし（ASR は prompt なし）。");
+    out.push(ctx.words.asr.model === "engine-subtitle"
+      ? "字幕自身を判定に使ったため、音声と字幕の一致率は算出できない。"
+      : "エンジン字幕（output-transcript.txt）が無いため算出なし（ASR は prompt なし）。");
   } else {
     const low = ag.perMinute.filter((m) => m.agreement !== null && m.agreement < AGREEMENT_WARN_BELOW);
     out.push(
@@ -165,10 +167,18 @@ export function renderReport(ctx: ReportContext): string {
     "- p50 / p95 は最近傍順位法（昇順に並べて ceil(p/100 × n) 番目）。",
     "- 遅延の p50 / p95 / max は backchannel を除き、訳が対応した区間だけの値（n はその件数）。≤5 s / ≤8 s、meaning、facts、重大誤りは statement・question の全件が分母で、未対応の区間は meaning 0・遅延なし（≤8 s に入らない）として数える。",
     "- lStart = 対応する英語の最初の語の開始 − 原文区間の開始、lEnd = 同 − 原文区間の終了（負なら話し終わる前に訳が始まった）、lTail = 対応する英語の最後の語の終了 − 原文区間の終了。",
-    `- 英語の時刻は ${doc.judge.asr} の単語時刻（output-timeline.wav のファイル内時刻 = t、理想再生モデル上の再生位置）。長い音声を 1 回で読ませると whisper が無音や崩れた窓のあとで無関係な文を出し続けるため、エネルギーで有声区間（閾値 ${ctx.words.thresholdDb ?? "—"} dBFS、間 1.5 s 未満は結合、25 s 超は最小エネルギー点で分割、前後 0.3 s の余白）に分け、区間ごとに呼んだ（${ctx.words.regions.length} 区間、送信 ${sec(ctx.words.sentMs, 1)} s / 元 ${sec(ctx.words.audioMs, 1)} s）。${ctx.words.asr.prompt === "engine-transcript" ? "prompt には区間の開始 −3 s（＋最大 queue）〜終了 +1 s に届いたエンジン字幕から、数字・略語・固有名詞だけを語の一覧で渡した（同じ綴りを使わせるため。字幕の文そのものを渡すと whisper が同じ内容を読み飛ばした）。" : "エンジン字幕が無いため prompt なし。"}語の時刻は区間の開始を足して t に戻した。完全無音の上に置かれた ${ctx.words.droppedSilentWords} 語を幻聴として除き、語頭・語尾が無音にかかる語は音のある位置へ寄せた（whisper は休止の後の最初の語を早めに置く傾向がある）。`,
+    ctx.words.asr.model === "engine-subtitle"
+      ? "- 英語の時刻はエンジン字幕の到着時刻。音声を再文字起こししていないため、lStart / lEnd / lTail は字幕到着に基づく代理指標であり、英語発話までの遅延として読まない。音声と字幕の不一致も検出できない。"
+      : `- 英語の時刻は ${doc.judge.asr} の単語時刻（output-timeline.wav のファイル内時刻 = t、理想再生モデル上の再生位置）。長い音声を 1 回で読ませると whisper が無音や崩れた窓のあとで無関係な文を出し続けるため、エネルギーで有声区間（閾値 ${ctx.words.thresholdDb ?? "—"} dBFS、間 1.5 s 未満は結合、25 s 超は最小エネルギー点で分割、前後 0.3 s の余白）に分け、区間ごとに呼んだ（${ctx.words.regions.length} 区間、送信 ${sec(ctx.words.sentMs, 1)} s / 元 ${sec(ctx.words.audioMs, 1)} s）。${ctx.words.asr.prompt === "engine-transcript" ? "prompt には区間の開始 −3 s（＋最大 queue）〜終了 +1 s に届いたエンジン字幕から、数字・略語・固有名詞だけを語の一覧で渡した（同じ綴りを使わせるため。字幕の文そのものを渡すと whisper が同じ内容を読み飛ばした）。" : "エンジン字幕が無いため prompt なし。"}語の時刻は区間の開始を足して t に戻した。完全無音の上に置かれた ${ctx.words.droppedSilentWords} 語を幻聴として除き、語頭・語尾が無音にかかる語は音のある位置へ寄せた（whisper は休止の後の最初の語を早めに置く傾向がある）。`,
     `- LLM には ${ctx.batches} 組（呼び出し ${ctx.llmCalls} 回）に分け、対象区間の開始 −${sec(ctx.windowBeforeMs, 0)} s〜終了 +${sec(ctx.windowAfterMs, 0)} s に始まる英単語と前後 3 区間の文脈を渡した。これより遅れた訳は未対応になる。時刻は LLM に出させず、選ばせた語 index から引いた。`,
-    `- token: input ${ctx.usage.inputTokens} / output ${ctx.usage.outputTokens}（うち reasoning ${ctx.usage.reasoningTokens}）。判定 1 回の所要時間: ${secondsSummary(ctx.callSeconds)}。`,
-    doc.judge.model.startsWith("agy:")
+    doc.judge.model.startsWith("codex:")
+      ? `- Codex app-server の token 使用量は未取得。ChatGPT ログインの利用枠でテキスト判定した。判定 1 回の所要時間: ${secondsSummary(ctx.callSeconds)}。`
+      : `- token: input ${ctx.usage.inputTokens} / output ${ctx.usage.outputTokens}（うち reasoning ${ctx.usage.reasoningTokens}）。判定 1 回の所要時間: ${secondsSummary(ctx.callSeconds)}。`,
+    doc.judge.model.startsWith("codex:")
+      ? `- 判定器は ChatGPT ログイン済み Codex app-server（${doc.judge.model.slice(6)}）。同じ OpenAI 系統のモデルなので判定の偏りに注意し、人手または別系統判定と照合する。${ctx.words.asr.model === "engine-subtitle" ? "音声の聞き違い・音声欠落は未検証。" : "ASR の聞き違いは判定に混ざる。"}`
+      : doc.judge.model.startsWith("anthropic:")
+        ? `- 判定器は Anthropic API の ${doc.judge.model.slice(10)}。ASR（${doc.judge.asr}）は OpenAI。ASR の聞き違いは判定に混ざる。重要な結論は人手で抜き取り確認する。`
+      : doc.judge.model.startsWith("agy:")
       ? `- 判定器は agy 経由の ${doc.judge.model.slice(4)}（OpenAI 以外）。ASR（${doc.judge.asr}）は OpenAI のまま。OpenAI の判定との違いは compare.ts で数値で比べる。ASR の聞き違いは判定に混ざる。`
       : `- 判定器（${doc.judge.model}）と ASR（${doc.judge.asr}）も OpenAI のモデルであり、OpenAI のエンジンを評価するときに同系統の偏り（言い回しの好み、同じ聞き違い）が出得る（--judge-backend agy で OpenAI 以外の判定と比べられる）。ASR の聞き違いは判定に混ざる。重要な結論は人手で抜き取り確認する。`,
   );

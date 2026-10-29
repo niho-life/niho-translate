@@ -9,6 +9,8 @@
  * - delegation は省略（= client）。通訳では backend へ委ねない。
  */
 import type { Engine, EngineConfig, EngineFactory, EngineSecrets, EngineSink } from "../engine.ts";
+import { readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { BYTES_PER_MS, PCM_SAMPLE_RATE } from "../engine.ts";
 import { buildInterpreterInstructions, INTERPRETER_PRESETS, type InterpreterPreset } from "../prompts/interpreter.ts";
 import {
@@ -37,14 +39,24 @@ const MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 export interface LiveSettings {
   readonly preset: InterpreterPreset;
   readonly voice: string;
+  /** Research-only. Plain text kept in the private evaluation directory. */
+  readonly context: string | null;
 }
 
 export function parseLiveOptions(options: Readonly<Record<string, string>>): LiveSettings {
   const resolved = resolveOptions(options, {
     preset: { default: "domain", values: INTERPRETER_PRESETS },
     voice: { default: "marin", pattern: VOICE_PATTERN },
+    contextFile: {},
   });
-  return { preset: resolved.preset as InterpreterPreset, voice: resolved.voice! };
+  let context: string | null = null;
+  if (resolved.contextFile !== undefined) {
+    if (!isAbsolute(resolved.contextFile)) throw new EngineError("INVALID_OPTION", "contextFile");
+    try { context = readFileSync(resolved.contextFile, "utf8").trim(); }
+    catch { throw new EngineError("INVALID_OPTION", "contextFile"); }
+    if (context.length < 20 || context.length > 800 || /[\u0000-\u001f]/u.test(context)) throw new EngineError("INVALID_OPTION", "contextFile");
+  }
+  return { preset: resolved.preset as InterpreterPreset, voice: resolved.voice!, context };
 }
 
 export function buildLiveSessionStart(config: EngineConfig, settings: LiveSettings): Record<string, unknown> {
@@ -53,7 +65,7 @@ export function buildLiveSessionStart(config: EngineConfig, settings: LiveSettin
     event_id: "evt_eval_start",
     session: {
       model: LIVE_MODEL,
-      instructions: buildInterpreterInstructions(settings.preset, config.sourceLanguage, config.targetLanguage),
+      instructions: buildInterpreterInstructions(settings.preset, config.sourceLanguage, config.targetLanguage, settings.context ?? undefined),
       audio: {
         format: { type: "audio/pcm", rate: PCM_SAMPLE_RATE },
         output: { voice: settings.voice },

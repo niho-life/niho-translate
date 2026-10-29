@@ -1,8 +1,8 @@
 import { glossaryLines } from "./glossary.ts";
 import type { Language } from "../engine.ts";
 
-export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "domain-glossary-q" | "compact-q" | "early-safe-q";
-export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "domain-glossary-q", "compact-q", "early-safe-q"];
+export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "domain-glossary-q" | "compact-q" | "early-safe-q" | "brisk-q";
+export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "domain-glossary-q", "compact-q", "early-safe-q", "brisk-q"];
 
 const LANGUAGE_NAME: Record<Language, string> = { ja: "Japanese", en: "English" };
 
@@ -10,7 +10,7 @@ const LANGUAGE_NAME: Record<Language, string> = { ja: "Japanese", en: "English" 
  * OpenAI 公式の通訳専用プロンプト例（live-prompting guide）を土台にした指示。
  * 音声モデル（gpt-live-1 / gpt-realtime）の instructions に渡す。
  */
-export function buildInterpreterInstructions(preset: InterpreterPreset, source: Language, target: Language): string {
+export function buildInterpreterInstructions(preset: InterpreterPreset, source: Language, target: Language, context?: string): string {
   const T = LANGUAGE_NAME[target];
   const S = LANGUAGE_NAME[source];
   const base = [
@@ -32,25 +32,32 @@ export function buildInterpreterInstructions(preset: InterpreterPreset, source: 
     `Questions stay questions: when the speaker asks something, render it as a question addressed to the listener (for example "Could you tell me about ...?"), in the second person. Never answer it and never turn it into a first-person statement.`,
     `Japanese place names stay as romanized Japanese (Kamakura, Zushi, Yokosuka). Never replace a place with a different place or translate its meaning.`,
   ];
-  if (preset === "plain") return base.join("\n");
-  if (preset === "plain-q") return [...base, ...twoParty].join("\n");
+  const contextLines = context ? ["", `Background to disambiguate terms only: ${context}`, "Do not add any fact from the background unless it is spoken in the audio."] : [];
+  if (preset === "plain") return [...base, ...contextLines].join("\n");
+  if (preset === "plain-q") return [...base, ...twoParty, ...contextLines].join("\n");
   // Research-only variants. Keep the product presets unchanged until measured.
   if (preset === "compact-q") return [...base, ...twoParty,
-    `Use concise, idiomatic spoken ${T}. Preserve every distinct claim, number, name, condition and negation. Shorten wording rather than removing facts; do not summarize the speaker.`
+    `Use concise, idiomatic spoken ${T}. Preserve every distinct claim, number, name, condition and negation. Shorten wording rather than removing facts; do not summarize the speaker.`,
+    ...contextLines,
   ].join("\n");
   if (preset === "early-safe-q") return [...base, ...twoParty,
-    `Begin a translation from a stable subject or topic when it can be said without predicting the unseen predicate. Hold back claims whose verb, polarity, number or condition is not yet audible. Do not speak generic filler merely to start early.`
+    `Begin a translation from a stable subject or topic when it can be said without predicting the unseen predicate. Hold back claims whose verb, polarity, number or condition is not yet audible. Do not speak generic filler merely to start early.`,
+    ...contextLines,
+  ].join("\n");
+  if (preset === "brisk-q") return [...base, ...twoParty,
+    `Speak at a brisk but intelligible conversational pace, around 15% faster than a relaxed pace. Keep every distinct claim, number, name, condition and negation; do not shorten or omit content to speak faster.`,
+    ...contextLines,
   ].join("\n");
   const domain = [
     ``,
     `Context: a face-to-face conversation at a community space in Kamakura, Japan. Topics often include living in the Shonan area, local places, real estate (buying, renting, viewings, contracts), visas and moving to Japan, and everyday life. Speakers may tell long stories; keep the narrative order and the speaker's first-person voice.`,
   ];
-  if (preset === "domain") return [...base, ...domain].join("\n");
+  if (preset === "domain") return [...base, ...domain, ...contextLines].join("\n");
   const glossary = [
     ``,
     `Glossary (use these renderings when the term appears):`,
     glossaryLines(),
   ];
-  if (preset === "domain-glossary-q") return [...base, ...twoParty, ...domain, ...glossary].join("\n");
-  return [...base, ...domain, ...glossary].join("\n");
+  if (preset === "domain-glossary-q") return [...base, ...twoParty, ...domain, ...glossary, ...contextLines].join("\n");
+  return [...base, ...domain, ...glossary, ...contextLines].join("\n");
 }

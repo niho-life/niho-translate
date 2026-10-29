@@ -15,6 +15,7 @@ import { isCurrentOutputWords, parseOutputWords, transcribeTimeline } from "./as
 import { AGY_DEFAULT_MODEL, AGY_EFFORTS, agyPrompt, isAgyQuotaError, runAgy, type AgySchemaMode } from "./agy.ts";
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORTS, createAnthropicJsonResponse } from "./anthropic.ts";
 import { runCodexJudge } from "./codex.ts";
+import { transcribeTimelineLocal } from "./local-whisper.ts";
 import { outputNames, parseReference, readBytes, readJson, readJsonIfExists, readRunMeta, readTextIfExists, writeText, type RunMeta } from "./files.ts";
 import { computeAggregate, resolveSegment } from "./metrics.ts";
 import { createJsonResponse, redactSecrets, supportsReasoning, type Usage } from "./openai.ts";
@@ -45,6 +46,9 @@ export interface JudgeArgs {
   readonly outName: string;
   readonly model: string;
   readonly skipAsr: boolean;
+  readonly asrOnly: boolean;
+  readonly asrBackend: "openai" | "local";
+  readonly whisperModel: string | null;
   /** subtitle はエンジン字幕到着時刻を用いる安価な暫定判定。音声開始の遅延ではない。 */
   readonly wordSource: "audio" | "subtitle";
   readonly batch: number;
@@ -65,13 +69,18 @@ const QUEUE_MARGIN_MS = 15_000;
 export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   const values = new Map<string, string>();
   let skipAsr = false;
+  let asrOnly = false;
   for (let k = 0; k < argv.length; k += 1) {
     const flag = argv[k];
     if (flag === "--skip-asr") {
       skipAsr = true;
       continue;
     }
-    if (!flag || !["--run", "--reference", "--judge-backend", "--model", "--batch", "--prompt-version", "--effort", "--out-name", "--agy-schema", "--word-source"].includes(flag)) {
+    if (flag === "--asr-only") {
+      asrOnly = true;
+      continue;
+    }
+    if (!flag || !["--run", "--reference", "--judge-backend", "--model", "--batch", "--prompt-version", "--effort", "--out-name", "--agy-schema", "--word-source", "--asr-backend", "--whisper-model"].includes(flag)) {
       throw new Error(`unknown argument: ${flag ?? ""}`);
     }
     const value = argv[k + 1];
@@ -97,6 +106,13 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   outputNames(outName);
   const wordSource = values.get("--word-source") ?? "audio";
   if (wordSource !== "audio" && wordSource !== "subtitle") throw new Error("--word-source must be audio or subtitle");
+  const asrBackend = values.get("--asr-backend") ?? "openai";
+  if (asrBackend !== "openai" && asrBackend !== "local") throw new Error("--asr-backend must be openai or local");
+  const whisperModel = values.get("--whisper-model") ?? null;
+  if (asrBackend === "local" && wordSource === "audio" && !skipAsr && (!whisperModel || !isAbsolute(whisperModel))) {
+    throw new Error("--asr-backend local requires --whisper-model <absolute path>");
+  }
+  if (whisperModel && asrBackend !== "local") throw new Error("--whisper-model requires --asr-backend local");
   // enforce が既定: prompt モードは 1 回で済むが、実測で壊れた JSON を返した
   const agySchema = values.get("--agy-schema") ?? "enforce";
   if (agySchema !== "prompt" && agySchema !== "enforce") throw new Error("--agy-schema must be prompt or enforce");
@@ -107,6 +123,9 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
     outName,
     model: values.get("--model") ?? (backend === "agy" ? AGY_DEFAULT_MODEL : backend === "anthropic" ? ANTHROPIC_DEFAULT_MODEL : backend === "codex" ? "gpt-6-astra" : OPENAI_DEFAULT_MODEL),
     skipAsr,
+    asrOnly,
+    asrBackend,
+    whisperModel,
     wordSource,
     batch,
     promptVersion: values.get("--prompt-version") ?? DEFAULT_PROMPT_VERSION,
@@ -260,16 +279,18 @@ async function loadWords(args: JudgeArgs, apiKey: string | undefined, meta: RunM
       words,
     };
   }
-  const wordsPath = join(args.runDir, "output-words.json");
+  const wordsPath = join(args.runDir, args.asrBackend === "local" ? "output-words-local.json" : "output-words.json");
   if (args.skipAsr) {
     const existing = await readJsonIfExists(wordsPath);
     if (isCurrentOutputWords(existing)) return parseOutputWords(existing);
-    throw new Error("--skip-asr requires an existing v2 output-words.json");
+    throw new Error(`--skip-asr requires an existing v2 ${args.asrBackend === "local" ? "output-words-local.json" : "output-words.json"}`);
   }
   const transcript = await readTextIfExists(join(args.runDir, "output-transcript.txt"));
   const deltas = transcript === null ? null : parseTranscript(transcript);
   const audio = parseWav(await readBytes(join(args.runDir, "output-timeline.wav")));
-  const doc = await transcribeTimeline(apiKey, audio, log, { deltas, queueMaxMs: meta.queueMaxMs });
+  const doc = args.asrBackend === "local"
+    ? await transcribeTimelineLocal(audio, args.runDir, args.whisperModel as string, log, { deltas, queueMaxMs: meta.queueMaxMs })
+    : await transcribeTimeline(apiKey, audio, log, { deltas, queueMaxMs: meta.queueMaxMs });
   await writeText(wordsPath, `${JSON.stringify(doc, null, 2)}\n`);
   const agreement = doc.agreement?.agreement;
   log(`asr: ${doc.words.length} words (${doc.droppedSilentWords} dropped on digital silence)${agreement == null ? "" : `, agreement with engine transcript ${Math.round(agreement * 100)}%`}`);
@@ -292,6 +313,10 @@ export async function main(argv: ReadonlyArray<string>): Promise<void> {
     throw new Error("reference window does not match the run window");
   }
   const wordsDoc = await loadWords(args, apiKey, meta);
+  if (args.asrOnly) {
+    process.stdout.write(`${JSON.stringify({ asr: wordsDoc.asr.model, words: wordsDoc.words.length, agreement: wordsDoc.agreement?.agreement ?? null })}\n`);
+    return;
+  }
   const words = wordsDoc.words;
   const sentences = groupSentences(words);
   const windowAfterMs = Math.max(WINDOW_AFTER_MS, meta.queueMaxMs + QUEUE_MARGIN_MS);

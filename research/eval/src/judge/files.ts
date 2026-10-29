@@ -118,7 +118,7 @@ export function parseReference(value: unknown): ReferenceDocument {
       Number.isFinite(seg.startMs) &&
       Number.isFinite(seg.endMs) &&
       (seg.endMs as number) >= (seg.startMs as number) &&
-      typeof seg.text === "string" &&
+      typeof seg.text === "string" && seg.text.trim().length > 0 &&
       KINDS.includes(seg.kind as ReferenceSegment["kind"]) &&
       Array.isArray(seg.facts);
     if (!ok) throw new Error(`reference segment #${k} has an unexpected shape`);

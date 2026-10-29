@@ -16,7 +16,7 @@ import type { OutputWord, RawSegmentJudgement } from "./types.ts";
 
 const CRITICAL: ReadonlySet<FactType> = new Set<FactType>(CRITICAL_FACT_TYPES);
 /** factErrorsByType のキー順（重大な型を先に）。未知の型は後ろに付く。 */
-const FACT_TYPE_ORDER: ReadonlyArray<FactType> = [...CRITICAL_FACT_TYPES, "proper_noun", "tense"];
+const FACT_TYPE_ORDER: ReadonlyArray<FactType> = [...CRITICAL_FACT_TYPES, "proper_noun"];
 export const JUDGE_FLAGS: ReadonlyArray<JudgeFlag> = [
   "omission",
   "hallucination",
@@ -156,7 +156,7 @@ export function latencyStats(segments: ReadonlyArray<JudgedSegment>, pick: (s: J
   };
 }
 
-/** engine.ts の CRITICAL_FACT_TYPES（地名 place を含み、proper_noun・tense は含まない）の wrong。 */
+/** engine.ts の CRITICAL_FACT_TYPES（地名 place と時制 tense を含む）の wrong。 */
 export function isCriticalFactError(fact: { readonly type: FactType; readonly verdict: FactVerdict }): boolean {
   return fact.verdict === "wrong" && CRITICAL.has(fact.type);
 }

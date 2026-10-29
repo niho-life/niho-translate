@@ -2,6 +2,8 @@
 
 調査日: 2026-10-28。対象: v1 の日英 2 人対面通訳（ホスト 1＋ゲスト 1、iPhone とイヤフォン、話者別ストリーム、聞き手だけに訳音声）。追跡 Issue: [#21](https://github.com/niho-life/niho-translate/issues/21)。前提の調査は [translation-quality-research.md](translation-quality-research.md)、同日の比較結果は [translation-quality-eval-2026-10-28.md](translation-quality-eval-2026-10-28.md)。
 
+**2026-10-29 更新:** §7 に追加の一次資料と、現行実装へ反映する順序を記載した。§4 の「A」は10/28時点の旧基準線で、現在のNode relayの既定は `gpt-live-1` の `plain-q`。連続5分の音声時刻による評価は [public-audio-software-evaluation-2026-10-29.md](public-audio-software-evaluation-2026-10-29.md) を正とする。
+
 公開資料から事実として言えることを整理し、NIHO の判断順（意味 > 運用の単純さ > 費用）で使える形にする。一次資料で確認した数値だけを断定し、起点・終点が書かれていない販促値は「比較不可」とする。研究の遅延値はモデル出力の時刻で、端末・回線・Bluetooth・再生待ちを含まない。NIHO の `L_start`（節の発話開始→その意味を担う英語音声の開始）とは定義が違うので、§1.1 の読み替えを経ずに並べない。
 
 ## 結論（10 行以内）
@@ -263,3 +265,54 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 - 研究の数値は、Seamless・Seed・NAIST 2025・NAIST-SIC・He et al.・NICT の 2 本は PDF 本文、Hibiki・Hibiki-Zero・StreamSpeech は HTML 本文の表で確認した。SimulTron と一部の抄録は取得ツールの要約経由で、表の列の読み違いの可能性が残る。
 - DeepL の docs には AI エージェント向けの指示文が埋め込まれていたが、調査の内容とは関係なく従っていない。
 - 料金・言語・提供条件は変わる。実装を始める日に一次資料を再確認する。
+
+## 7. 追加調査：既製品・公開実装から採る設計（2026-10-29）
+
+### 7.1 世界の実装を「製品に使える制御」で比較する
+
+| 系統と一次資料 | 公開されている仕組み・制御 | NIHO に採り込む判断 |
+|---|---|---|
+| [Google の直接音声翻訳研究](https://research.google/blog/real-time-speech-to-speech-translation/)／[Meet 開発チーム](https://blog.google/products-and-platforms/products/workspace/google-meet-langauge-translation-ai/) | ストリーミングの音声エンコーダ・生成器。研究システムでは約2秒の先読みを用い、Meetの開発者は会話の聞きやすさから2〜3秒の遅れを目安に説明する。公開された直接方式の対象は英語と欧州5言語で、日本語の成果値ではない | モデルの先読みと耳への到達を分けて測る。固定の2秒先読みをNIHO側へ追加しない |
+| [Meta SeamlessStreaming](https://ai.meta.com/resources/models-and-libraries/seamless-communication-models/)／[公式実装・ライセンス](https://github.com/facebookresearch/seamless_communication) | モデル内の単調なread/write方策で「聞き続ける／訳を出す」を選ぶ。日本語は対象だが、公開モデル重みはCC BY-NC 4.0 | 音声の確定タイミングをモデル・言語対の能力として評価する。非商用重みを製品へ組み込まない |
+| [Microsoft Teams Interpreter](https://learn.microsoft.com/en-us/microsoftteams/interpreter-agent-teams) | 音声認識→翻訳→音声合成の管理された経路。日本語と英語を含む複数話者の会議に対応 | 直列工程があるだけで品質・速度不足とは決めない。ただしNIHOが独自に3サービスをつなぐ判断は、管理された単一セッションAPIと同条件で比較してから行う |
+| [Timekettle W4 Plus](https://www.timekettle.co/products/w4-plus-ai-interpreter-earbuds)／[米国特許出願](https://patents.google.com/patent/US20250363985A1/en) | 製品は専門分野・会話記憶を案内。特許にはASR途中結果の安定判定、区切り、訳音声の再生待ち対策が実施例としてある | 用語と長い会話の一貫性、再生待ちを別の評価軸にする。特許の数値をW4 Proの実装値としてコピーしない |
+| [DeepL Voice API](https://developers.deepl.com/api-reference/voice/request-session) | 単一の音声セッションで、原文認識への `spoken_terms_id` と訳文への `glossary_ids` を別々に設定できる。ストリーミングの分割位置によって複数語の用語指定は漏れ得る | 鎌倉・湘南の地名、物件用語、人名の正確さを比較する第一候補。用語適用率も測る |
+| [Qwen LiveTranslate API](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen3-5-livetranslate-flash-realtime) | 日英の音声入出力、原文字幕、話者検出、`session.translation.corpus.phrases` によるhotwordを文書化 | DeepLと同じ用語fixtureで比較する候補。提供地域・契約・データ保持を確認するまで私有音声は送らない |
+| [ElevenLabs Realtime Translation API](https://elevenlabs.io/docs/api-reference/realtime-translation/v-1-translation-realtime)／[発表](https://elevenlabs.io/blog/realtime-translation) | `eagerness=low/medium/high` で訳出開始の慎重さを調整でき、原文・訳文テキストと訳音声を返す。2026-10時点の提供はenterprise向けalpha | 品質優先のlowと中間のmediumを比較する候補。日英対応・アクセス・保持条件の確認前に実データ試験を予定しない |
+| [Apple Live Translation](https://support.apple.com/ja-jp/123185) | 端末上で処理し、騒音時にはiPhoneを相手へ近づける運用を案内 | 録音環境・マイク位置・イヤフォン経路を、モデルの点数から切り分ける。PCのWAV試験を実機の代用にしない |
+| [OpenAI 通訳ガイド](https://developers.openai.com/cookbook/examples/voice_solutions/realtime_translation_guide)／[GPT-Live指示例](https://developers.openai.com/api/docs/guides/live-prompting) | 専用翻訳モデルはカスタムprompt・用語集を受けず、原文文字起こしはサイドカー。GPT-Liveには通訳専用の指示例がある | 現在の `gpt-live-1`＋`plain-q` を比較基準とし、背景情報の既定採用は複数録音・反復で検証する |
+| [ACL 2026の解釈行動の研究](https://aclanthology.org/2026.findings-acl.611/) | 単純な「待つ／書く」に加え、文の切り方・冗長語の省略・部分的要約・代名詞化を選ぶLLMの同時翻訳方策を評価。実験は英→中・独・日で、遅延を考慮したTTSも使う | 「早く出す」の一律指示より、意味を保って切れる位置の研究が重要。ただし日→英の音声対話と現行単一セッションAPIの内部制御を示す結果ではない。数字・否定・主体を省略してよい根拠にもならない |
+
+研究で公開された [StreamSpeech](https://github.com/ictnlp/StreamSpeech) は欧州語→英語、[Hikari](https://github.com/sbintuitions/hikari) は英語→日本語テキスト、[Voiceping のJA–EN Whisper実装](https://github.com/voiceping-ai/whisper-ja-en-speech-translation) は音声→テキスト翻訳である。いずれも現行の**日→英・連続音声→訳音声・対面通訳**をそのまま置き換える公開実装とは確認できなかった。評価器や学習方策の参考に留める。
+
+### 7.2 現行コードに反映したものと次の採用ゲート
+
+| 順位 | 内容 | 状態・採否の根拠 |
+|---:|---|---|
+| 1 | 話者別の連続音声入力、原文・訳文字幕、再生待ちの上限、内容を残さない診断 | 実装済み。入力の無音は継続送信される。出力側だけデジタル無音を短縮する。iPhoneとイヤフォンの実測は未了 |
+| 2 | 長い会話での遅延蓄積を見える化 | このPRで研究レポートに**原文開始時刻で区切った1分ごとの**意味平均、`L_start` p50/p95、8秒以内率、未対応、重大事実誤りを追加。未対応は8秒以内率と意味平均の分母に残す |
+| 3 | 同一条件の既製API比較 | 合成の日英対話・地名/数字/否定/質問を用い、5分以上×複数録音×反復で `gpt-live-1`、DeepL Voice、Qwen、利用可能ならElevenLabsを比較。音声時刻で `L_start`/`L_fact`、終了時刻・再生待ち、用語適用率を採る。各APIの費用・データ保持・利用可能地域も記録。Qwen研究用adapterの実サービス疎通と公開音声5分評価は完了。自然な高密度対談では区切り方式を変えても再生待ち最大38.55秒以上で製品採用は保留 |
+| 4 | 背景・用語・訳出タイミングの調整 | 既存の背景promptは私有対談3組で意味中央値2.35→2.58/3だったが、`L_start` p95は10.54→11.65秒と悪化。単一の成功窓で製品既定を変えない。用語指定や`eagerness`も独立録音で重大誤り・p95・聞き取りを並べる |
+| 5 | 独自の部分ASR→分割翻訳→TTS | 既製の単一セッションAPIで意味と耳到達の両方を満たせない場合だけ試作。訳音声の後からの訂正不可、文末の否定、三段の障害・費用を受入条件に入れる |
+
+[IWSLT 2026 の長時間音声評価](https://aclanthology.org/2026.iwslt-1.3/)は、音声の語時刻と意味対応で遅延を測り、長い音声では遅延が蓄積し得ることを報告している。上の1分表はこの問題をNIHOの既存指標で診断するもので、論文のYAALなどを実装したものではない。[WMT 2026 の人間と機械の同時通訳比較](https://aclanthology.org/2026.wmt-main.30/)が扱う内容・提示・文体の違いも踏まえ、最終採否では数字・否定・主体の人手確認と、聞き手に分かる英語かの盲検を残す。自動判定の点数だけで製品品質を保証しない。
+
+現行の公開音声5分試験では `gpt-live-1` の意味平均2.69/3に対し、音声基準の `L_start` はp50 7.94秒、p95 13.52秒、8秒以内49%だった。別の私有対談では6runのうち1runで対応38区間中24件が8秒超、理想再生キュー最大0.39秒だった。参考原稿・語対応は人手校正前で、いずれも実機の耳到達ではない。**現在の意味と遅延を最高水準・製品受入済みとは扱わず、次の比較の基準線にする。** 根拠と限界は[連続音声の評価記録](public-audio-software-evaluation-2026-10-29.md)にある。
+
+### 7.3 Qwenの日→英品質を採用判断に使う条件（2026-10-29）
+
+- [Qwenチームの発表](https://qwen.ai/blog?id=qwen3.8-livetranslate)と[Model Studioの仕様](https://docs.modelstudio.console.alibabacloud.com/ja/model-studio/qwen3-5-livetranslate-flash-realtime)では、日本語を入力音声として、英語を訳音声として扱える。原文字幕はQwen3.8で常時有効、用語は`session.translation.corpus.phrases`へ設定できる。したがって**日→英の実験候補として妥当**。
+- QwenチームはFLEURSの70言語方向を評価したと発表するが、公開本文に日→英単独の数値、会話5分の結果、NIHOの「発話開始→対応する英語音声開始」と同じ遅延指標は示されていない。[Tencent Hunyuanの比較](https://github.com/Tencent-Hunyuan/Hy-SimulMT)は中国語↔英語を対象としており、日→英の裏付けには使えない。**現行GPT-Liveより日本語で高精度・高速とは未証明**。
+- [Model Studio価格表](https://www.alibabacloud.com/help/en/model-studio/model-pricing)はシンガポールの`qwen3.8-livetranslate-flash-realtime`に新規利用者向け100万トークンを掲示する。[無料枠の条件](https://www.alibabacloud.com/help/en/model-studio/new-free-quota)は90日、シンガポール限定。オーナーのコンソールで対象モデルの100万トークン残枠と超過時停止の有効化を確認した。研究用APIキーは同モデルだけに制限し、Git管理外で保管する。料金画面の反映には遅延があり得るため、実際の請求額は後日も確認する。
+- 公開J-WAVEの同一5分窓では、Qwenの意味平均2.51/3、`L_start` p50 9.26秒・p95 13.65秒、8秒以内33%、再生待ち最大12.34秒。GPT-Live標準はそれぞれ2.69/3、7.94秒・13.52秒、49%、0.39秒。別の公開会見5分ではQwenが速い（p50 5.39秒、8秒以内96%）反面、意味2.21/3・欠落5件・再生待ち最大5.66秒。GPT-Liveは遅い（p50 10.20秒、8秒以内32%）が意味2.86/3・欠落0件だった。両方とも同じローカル音声認識と判定器で訳音声を採点した。詳しくは[連続音声の評価記録](public-audio-software-evaluation-2026-10-29.md)。各録音1runで優劣を確定しない。
+- 追加した[尼崎市ラジオの自然な対談5分](public-audio-software-evaluation-2026-10-29.md#自然な日本語対談5分の比較と構成判断2026-10-30)では、Qwenの標準話者検出は一度訳した内容を原文字幕・訳音声の双方に繰り返し、生成音声382.80秒・再生待ち最大85.59秒になった。`server_vad`はこの1回の繰り返しを解消したが、生成音声335.28秒・再生待ち最大38.55秒。GPT-Liveは生成302.26秒・待ち最大0.39秒。`server_vad`を含むQwenの訳音声には、開催予定を過去形で述べる誤りが残った。読み上げ短文でのQwenの優位は、連続した対談の製品判断に移せない。
+- 次は公開音声の独立録音と日英話者の聴取、事前に分かる用語だけの比較で再現性を調べる。**私有の不動産対談をAlibabaへ送る許可は得ていない**。研究用アダプターは製品経路に未接続で、現在の製品既定は変えない。
+
+### 7.4 「世界水準まで精度を磨き切った」と言えない理由
+
+1. 現在の参考原稿と訳音声の語時刻は主にASRと機械判定による。対談中の質問・主体・否定・固有名詞を日英話者が原音声と訳音声でブラインド採点しておらず、意味平均点を製品の正確率と解釈できない。誤りの疑いがある6区間について、基準と背景ありの条件名を隠した短い音声18本の聴取パックをGit管理外に準備した。
+2. 短い背景・用語・訳出タイミングを独立に変えた同一5分窓では、品質と速度の改善が再現していない。条件ごと1runで、同じ録音への最適化は過学習し得る。別話者・別話題・騒音・重なり発話でも事実誤り率と聞き取りやすさを比較する必要がある。
+3. 製品既定のGPT-Liveは、公式指示に質問を質問として訳す規則があっても質問の回答化が残った。[OpenAIの通訳実装ガイド](https://developers.openai.com/cookbook/examples/voice_solutions/realtime_translation_guide)も、汎用音声モデルが問いに答えてしまう場合があると説明する。自動採点ではGPT-Liveが専用翻訳モデルを上回ったが、対面会話の質問・主体について両モデルの訳音声を同じ日英評価者が比較する余地がある。
+4. DeepL Voiceの認識用用語と訳語glossary、ElevenLabsの慎重な出力設定は利用資格がないため実測できていない。公開仕様から日→英の優劣を断定しない。端末マイク・Bluetooth・イヤフォンの耳到達時刻は別の実機ゲートである。
+
+採用順は品質を先に置く。まず人手で正しい原文と意味上の重大誤りを確定し、その上で独立録音・複数runの音声遅延を比較する。モデルの切り替えや新しい分割アルゴリズムは、その比較で既定を上回った場合に限る。

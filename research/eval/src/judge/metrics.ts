@@ -206,3 +206,34 @@ export function computeAggregate(segments: ReadonlyArray<JudgedSegment>): JudgeA
     flagCounts,
   };
 }
+
+/** 原文の開始時刻で1分帯に分ける。未対応も分母に残し、長時間runの遅延蓄積を見せる。 */
+export function minuteDiagnostics(
+  reference: ReadonlyArray<ReferenceSegment>,
+  judged: ReadonlyArray<JudgedSegment>,
+): ReadonlyArray<{ minute: number; scored: number; missing: number; lStart: LatencyStats; meaningMean: number | null; criticalFactErrors: number }> {
+  const byId = new Map(judged.map((s) => [s.id, s]));
+  const groups = new Map<number, JudgedSegment[]>();
+  for (const ref of reference) {
+    if (!isScoredKind(ref.kind)) continue;
+    const minute = Math.floor(ref.startMs / 60_000) + 1;
+    const group = groups.get(minute) ?? [];
+    const result = byId.get(ref.id);
+    // Missing judge output is a missed translation, never a fast or correct one.
+    group.push(result ?? {
+      id: ref.id, kind: ref.kind, aligned: false, enStartMs: null, enEndMs: null,
+      enText: null, lStartMs: null, lEndMs: null, lTailMs: null, meaning: 0,
+      facts: ref.facts.map((f) => ({ ...f, verdict: "omitted" as const })),
+      flags: ["omission"], note: "判定なし",
+    });
+    groups.set(minute, group);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a - b).map(([minute, group]) => ({
+    minute,
+    scored: group.length,
+    missing: group.filter((s) => !s.aligned).length,
+    lStart: latencyStats(group, (s) => s.lStartMs),
+    meaningMean: round(group.reduce((sum, s) => sum + s.meaning, 0) / group.length, 3),
+    criticalFactErrors: group.flatMap((s) => s.facts).filter(isCriticalFactError).length,
+  }));
+}

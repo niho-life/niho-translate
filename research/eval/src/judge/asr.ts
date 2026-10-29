@@ -181,7 +181,7 @@ async function crossCheckLowMinutes(
   return { ...agreement, perMinute };
 }
 
-/** 現行版（v2）の output-words.json か。古い版は --skip-asr でも作り直す。 */
+/** 現行版（v2）の output-words.json か。--skip-asr では古い版を使わない。 */
 export function isCurrentOutputWords(value: unknown): boolean {
   return typeof value === "object" && value !== null && (value as { version?: unknown }).version === OUTPUT_WORDS_VERSION;
 }

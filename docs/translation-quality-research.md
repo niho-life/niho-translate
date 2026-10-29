@@ -4,6 +4,12 @@
 
 **2026-10-28 追記:** この文書の測定設計に沿って A（現行）/ B（`gpt-live-1`）/ B2（realtime VAD）/ D'（cascade 試作）を同条件で比較した結果は [translation-quality-eval-2026-10-28.md](translation-quality-eval-2026-10-28.md)、ハーネスは [research/eval](../research/eval/README.md)。
 
+**2026-10-29 更新:** 公開音声と非公開対談の連続5分を、英語**音声**の単語時刻まで再評価した結果は [public-audio-software-evaluation-2026-10-29.md](public-audio-software-evaluation-2026-10-29.md)。字幕時刻は耳到達を大きく楽観視し得る。背景注入は一部の窓で意味と遅延を改善したが、別窓で悪化し、各条件の反復と人手聴取は未了。以下の§2～§3は主に10/24時点の基準線として読む。
+
+**2026-10-29 追加調査:** 世界の製品・研究・公開実装から採れる制御とNIHOの実装順は [simultaneous-interpretation-landscape-2026.md §7](simultaneous-interpretation-landscape-2026.md#7-追加調査既製品公開実装から採る設計2026-10-29) に整理した。
+
+**2026-10-29 PC追試:** 背景・用語・訳出タイミングを単独で変えた5分比較と、重要事実が訳**音声**へ出るまでの`L_fact`計測は [pc-quality-factor-evaluation-2026-10-29.md](pc-quality-factor-evaluation-2026-10-29.md)。いずれも製品既定へ昇格できる再現性はまだ示していない。
+
 この文書は、次の実装担当が**何を先に試し、どの結果で採否を決めるか**を記す。公開資料にある機能、NIHOの現行コード、実測済みの範囲、未検証の仮説を分ける。製品としての性能保証や、他社製品の内部実装の断定ではない。
 
 ## 1. 結論と優先順位
@@ -12,7 +18,7 @@
 
 1. **現行のOpenAI `gpt-realtime-translate`を基準線にする。** 音声を連続送信して訳音声と訳字幕を受ける通訳専用セッションで、NIHO側にASR→翻訳→TTSの直列処理を追加しない。現時点で実機の意味対応遅延と品質は合格未証明。
 2. **先に入力音質、送信間隔、再生待ちを計測する。** 実際の5分試験では出力集中があり、モデル変更だけで受信者の待ち時間は決まらない。耳に届く時刻で評価する。
-3. **専門語・背景情報が効くかは別の単一音声セッションで比較する。** `gpt-realtime-translate`にはカスタムプロンプト・用語集がない。OpenAI `gpt-live-1`の通訳専用指示とDeepL Voice APIのSpoken Terms／glossaryを候補にする。どちらもこの用途の実測は未了。
+3. **専門語・背景情報が効くかは別の単一音声セッションで比較する。** `gpt-realtime-translate`にはカスタムプロンプト・用語集がない。OpenAI `gpt-live-1`の通訳専用指示とDeepL Voice APIのSpoken Terms／glossaryを候補にする。GPT-Liveの初回A/Bは上記10/29評価に追記済みで、DeepLは未評価。
 4. **字幕の先行確定と訳音声の確定を混同しない。** 日本語の述語、否定、条件は後ろに来る。聞き手に出した訳音声は後から訂正できない。文末を待つことで8秒を超える発話は、事実を推測して早出しするより「情報がまだ届いていない」と測定する。
 5. **Timekettleの特許は研究用の設計例。** 安定した部分認識・意味区切り・再生待ち管理は有益だが、W4 Proの実装値やNIHOの推奨閾値とみなさない。カスケードを再検討するのは、単一セッション型で品質・遅延を満たせず、改善幅を見積もれる場合だけ。
 
@@ -22,12 +28,13 @@
 
 ```text
 話者マイク（iPhone、voice processing）
-  → 24 kHz mono PCM16 → client/relay → 話者別OpenAI translation session
+  → 24 kHz mono PCM16 → client/relay → 話者別OpenAI音声通訳session
   → 訳音声PCM・訳字幕 → relay → 聞き手iPhoneの再生queue → private headset
 ```
 
 | 箇所 | 現在の契約・観察点 | 実装時の注意 |
 |---|---|---|
+| [`packages/provider-openai-live/src/index.ts`](../packages/provider-openai-live/src/index.ts) | Node版relayの既定は `gpt-live-1`・`plain-q`・`marin`。同じtransport・無音規則・drain契約で、原文字幕も受ける | 背景指示は研究ハーネスでA/B中で、製品既定には入れていない。実イヤホン品質・遅延は未受入 |
 | [`packages/provider-openai/src/index.ts`](../packages/provider-openai/src/index.ts) | `gpt-realtime-translate`、`near_field`、入力文字起こし無効、24 kHz PCM16、出力deltaを最大4,800 byteに分割。初期設定ACKを待ち、送信バッファに上限がある | OpenAIの入力文字起こしは追加できるが、**翻訳の入力として使う機能ではない**。診断用でも公開ログに本文を出さない |
 | [`ios/Sources/NIHOTranslate/TranslateAudioEngine.swift`](../ios/Sources/NIHOTranslate/TranslateAudioEngine.swift) | `.playAndRecord` + `.voiceChat`、Bluetooth HFP、有線route、voice processing、再サンプリング | マイクroute・OS処理・Bluetoothの遅れを含む実機比較が必要。WAV直接送信の結果を実機音質へ外挿しない |
 | [`ios/Sources/NIHOTranslateCore/PlaybackScheduler.swift`](../ios/Sources/NIHOTranslateCore/PlaybackScheduler.swift) | 未再生保持の上限は 2 段（soft 96,000 byte = 2.0 秒で観測通知、hard 240,000 byte = 5.0 秒で未 schedule の古い無音→古い音声を落として継続。2026-10-28 に terminal 停止から変更）、同時schedule 19,200 byte（約0.4秒） | 上限を増やすだけでは遅れが蓄積する。キュー長・再生完了・soft 超過・drop を別に観測する。実機での既定値の妥当性は未検証 |
@@ -39,7 +46,7 @@
 
 2026-10-24に利用承認済み日本語WAVの**異なる5分区間を2本**、provider adapter単体へ実時間入力した。送信は100 ms単位、各区間の後に無音とflushを入れ、双方とも接続とflushが完了した。音声・字幕本文・元ファイル名はこの公開文書へ持ち込まない。数値はローカル試験の集計で、独立した人手採点を通した性能主張ではない。
 
-元WAVと録音に付随する日本語文字起こしは、この公開Gitリポジトリとは別のローカル私有資料に保管する。次担当はオーナーから場所と利用範囲を確認すること。試験時の訳音声・訳字幕本文は保存していないため、過去の英訳文を復元できない。
+元WAVと録音に付随する日本語文字起こしは、この公開Gitリポジトリとは別のローカル私有資料に保管する。次担当はオーナーから場所と利用範囲を確認すること。**この10/24予備試験**では訳音声・訳字幕本文を保存していないため、当時の英訳文を復元できない。10/28～29の研究ハーネスによる再評価はprivateディレクトリに訳音声と区間別判定を保存した。
 
 | 観測 | 結果 | 解釈の限界 |
 |---|---|---|
@@ -136,7 +143,7 @@ DeepLの[言語表](https://developers.deepl.com/docs/voice/supported-voice-lang
 ## 8. 次のセッションが最初に答える質問
 
 - 実機HFP／有線で、発話onset→耳の対応訳音声onsetは各方向でP50/P95何秒か。provider first byteとの開きはどこにあるか。
-- 5分で観測した最大4.91秒の理想queueは、どの原文・出力条件の局所集中か。iOSでterminal overflowが再現するか。
+- 旧`gpt-realtime-translate`の5分で観測した最大4.91秒の理想queueは、どの原文・出力条件の局所集中か。現行GPT-Liveの公開ラジオ評価では最大0.37～0.45秒だったので、現行経路では意味確定・音声生成の遅れとiOSの実queueを分けて追う。iOSでterminal overflowが再現するか。
 - 「固有名詞の誤り」は認識、訳語、訳音声、評価者の聞き取りのどこで発生するか。原文字幕を診断に使っても、文字起こしを真値と誤認しないか。
 - Bの背景・用語は不動産語を改善し、誤った推測や応答行動を増やさないか。Bの遅延・費用はAよりどう変わるか。
 - CのSpoken TermsとglossaryはJA→ENとEN→JAで効くか。転写の安定性・訳音声開始・再生待ちを含めてAに勝るか。
@@ -153,4 +160,4 @@ API・料金・言語対応は変わり得る。実装開始日に一次資料�
 
 ## 10. この文書の未検証事項
 
-実iPhone 2台・private headsetでの`L_start`／`L_fact`／`L_tail`、人手採点の翻訳正確率、DeepL・GPT-Liveの実API比較、再生速度調整の聞き取り、60分の遅れ蓄積は未検証。次の実装セッションは、これらを結果として追加し、測定条件・分母・失敗例・未測定を隠さず更新する。
+実iPhone 2台・private headsetでの`L_start`／`L_fact`／`L_tail`、人手採点の翻訳正確率、DeepL Voiceとの同条件比較、背景注入の反復性、再生速度調整の聞き取り、実機60分の遅れ蓄積は未検証。GPT-Liveのソフトウェア上の実API比較は上記10/28・10/29評価に記録した。次の実装セッションは、測定条件・分母・失敗例・未測定を隠さず更新する。

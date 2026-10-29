@@ -64,7 +64,8 @@ export function buildRows(runs: ReadonlyArray<RunRecord>): TableRow[] {
   const rows: TableRow[] = [];
   for (const list of groups.values()) {
     const first = list[0] as RunRecord;
-    const judged = list.filter((r) => r.judgement !== null);
+    // 旧 run で judgement.json に保存された字幕代理判定も、音声遅延へ混ぜない。
+    const judged = list.filter((r) => r.judgement !== null && r.judgement.judge.asr !== "engine-subtitle");
     const segments: JudgedSegment[] = judged.flatMap((r) => [...(r.judgement as JudgeDocument).segments]);
     const agg = judged.length > 0 ? computeAggregate(segments) : null;
     const costs = list.map((r) => r.summary.costUsdEstimate);

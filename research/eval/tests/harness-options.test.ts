@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildInterpreterInstructions } from "../src/prompts/interpreter.ts";
 import { firstVoicedSample, formatRunId, parseCliArgs, parseOptionArgs, randomSuffix, resolveOutRoot, RunRecorder, VOICED_PEAK } from "../src/run.ts";
 import { loadEngineFactory, resolveOptions } from "../src/engines/index.ts";
@@ -135,7 +138,7 @@ describe("openai-translate options", () => {
 describe("openai-live session.start", () => {
   it("sends model, interpreter instructions, PCM 24 kHz and voice", () => {
     const settings = parseLiveOptions({});
-    expect(settings).toEqual({ preset: "domain", voice: "marin" });
+    expect(settings).toEqual({ preset: "domain", voice: "marin", context: null });
     expect(buildLiveSessionStart({ ...CONFIG, engineId: "openai-live" }, settings)).toEqual({
       type: "session.start",
       event_id: "evt_eval_start",
@@ -147,6 +150,21 @@ describe("openai-live session.start", () => {
     });
     expect(() => parseLiveOptions({ inputTranscription: "1" })).toThrow("UNKNOWN_OPTION");
     expect(() => parseLiveOptions({ preset: "chatty" })).toThrow("INVALID_OPTION");
+  });
+  it("loads a short research context from a private file without changing the default prompt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "niho-eval-context-"));
+    try {
+      const path = join(dir, "context.txt");
+      writeFileSync(path, "Two people discuss property visits in Kamakura.");
+      const settings = parseLiveOptions({ preset: "plain-q", contextFile: path });
+      const started = buildLiveSessionStart({ ...CONFIG, engineId: "openai-live" }, settings);
+      const session = started.session as { instructions: string };
+      expect(session.instructions).toContain("Background to disambiguate terms only: Two people discuss property visits in Kamakura.");
+      expect(session.instructions).toContain("Do not add any fact from the background unless it is spoken in the audio.");
+      expect(() => parseLiveOptions({ contextFile: "relative.txt" })).toThrow("INVALID_OPTION");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -7,7 +7,7 @@
 export type Language = "ja" | "en";
 
 export interface EngineConfig {
-  /** "openai-translate" | "openai-live" | "openai-realtime" | "cascade" | "gemini-live-translate" */
+  /** "openai-translate" | "openai-live" | "openai-realtime" | "cascade" | "gemini-live-translate" | "qwen-live-translate" */
   readonly engineId: string;
   readonly sourceLanguage: Language;
   readonly targetLanguage: Language;
@@ -21,6 +21,8 @@ export interface EngineSecrets {
   readonly openaiApiKey: string;
   /** Vertex AI（Gemini Live）のアクセストークン。gemini-* エンジンだけが使う。 */
   readonly googleAccessToken?: string;
+  /** Alibaba Cloud Model Studio。qwen-live-translate のみ使用。 */
+  readonly qwenApiKey?: string;
 }
 
 export interface TranscriptMeta {

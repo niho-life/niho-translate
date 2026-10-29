@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CRITICAL_FACT_TYPES, type JudgedSegment, type ReferenceSegment } from "../src/engine.ts";
-import { computeAggregate, isCriticalFactError, latencyStats, nearestRank, resolveSegment } from "../src/judge/metrics.ts";
+import { computeAggregate, isCriticalFactError, latencyStats, minuteDiagnostics, nearestRank, resolveSegment } from "../src/judge/metrics.ts";
 import type { OutputWord, RawSegmentJudgement } from "../src/judge/types.ts";
 
 const words: OutputWord[] = [
@@ -51,6 +51,29 @@ describe("nearestRank", () => {
     expect(nearestRank([1, 2, 3], 50)).toBe(2);
     expect(nearestRank([1, 2, 3], 95)).toBe(3);
     expect(nearestRank([], 50)).toBeNull();
+  });
+});
+
+describe("minuteDiagnostics", () => {
+  it("groups by source onset and retains omitted segments in the 8-second denominator", () => {
+    const references = [
+      ref("a", "statement", 0, 3_000),
+      ref("b", "question", 59_900, 62_000),
+      ref("c", "statement", 60_000, 64_000),
+      ref("d", "statement", 61_000, 65_000, [{ type: "negation", text: "しません" }]),
+      ref("e", "backchannel", 62_000, 62_300),
+    ];
+    const output = [
+      judged("a", "statement", 4_000),
+      judged("b", "question", 9_000, { meaning: 2 }),
+      judged("c", "statement", 6_000),
+      judged("d", "statement", null, { facts: [{ type: "negation", text: "しません", verdict: "wrong" }] }),
+      judged("e", "backchannel", 1_000),
+    ];
+    expect(minuteDiagnostics(references, output)).toEqual([
+      { minute: 1, scored: 2, missing: 0, lStart: { n: 2, p50: 4_000, p95: 9_000, max: 9_000, within5s: 0.5, within8s: 0.5 }, meaningMean: 2.5, criticalFactErrors: 0 },
+      { minute: 2, scored: 2, missing: 1, lStart: { n: 1, p50: 6_000, p95: 6_000, max: 6_000, within5s: 0, within8s: 0.5 }, meaningMean: 1.5, criticalFactErrors: 1 },
+    ]);
   });
 });
 

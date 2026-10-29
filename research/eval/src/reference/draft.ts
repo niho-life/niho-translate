@@ -8,7 +8,7 @@ import type { TranscriptExcerpt } from "./transcript.ts";
 import type { TranscriptKind } from "./args.ts";
 import { FACT_TYPES, SEGMENT_KINDS } from "./validate.ts";
 
-/** v4: D（転記）の種類で説明を切り替える（human = 人手未校正の転記、gemini = Gemini の文字起こし）。 */
+/** v5: D（転記）の種類の説明に加え、不動産の権利形態を独立した重大事実へ分類する。 */
 export const PROMPT_VERSION = "reference-draft-v5";
 
 export type SourceKey = "A" | "B" | "C" | "D";

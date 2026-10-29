@@ -34,7 +34,7 @@ swift test --package-path ios
 RELAY_MODE=mock npm -C examples/relay-local start
 ```
 
-mock relayは `127.0.0.1:8787` だけでlistenします。WebSocketの `Authorization` headerには合成token `host-ja` または `guest-en` を指定します。hostは `client.ready` 後に `room.start` を送る必要があります。ticketをURL queryへ置きません。
+mock relayは既定で `127.0.0.1:8787` にlistenします。明示的なコンテナ配備だけ `HOST=0.0.0.0` と `PORT` を設定できます。無資格のmockを常設の公開サービスにしないでください。WebSocketの `Authorization` headerには合成token `host-ja` または `guest-en` を指定します。hostは `client.ready` 後に `room.start` を送る必要があります。ticketをURL queryへ置きません。
 
 reference relayは単一process用です。本番の水平分散では、同じ `roomId + roomEpoch` を必ず同じsingle-writerへrouteしてください。
 

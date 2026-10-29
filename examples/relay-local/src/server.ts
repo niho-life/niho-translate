@@ -28,7 +28,9 @@ import {
 import type { AuthorityRoomState } from "../../../packages/room-core/src/index.ts";
 
 const mode = process.env.RELAY_MODE ?? "mock";
-const translateProvider = process.env.TRANSLATE_PROVIDER ?? "translate";
+// Default route since the 2026-10-29 evaluation (docs/translation-quality-eval-2026-10-28.md §8.11).
+// TRANSLATE_PROVIDER=translate selects the previous gpt-realtime-translate route.
+const translateProvider = process.env.TRANSLATE_PROVIDER ?? "live";
 const port = Number(process.env.PORT ?? "8787");
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("INVALID_PORT");
 

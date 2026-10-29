@@ -212,3 +212,7 @@ Google の通訳専用モデル gemini-3.5-live-translate-preview（Preview・20
 - 運用面: Preview、global のみ、用語集・話者名・人称の指示を入れられない。費用は usageMetadata の response token が常に 0 で返るため token 単価では見積もれず、公式の価格表も未確認（GCP の請求で後日確認）。
 - **判断: 主経路は B のまま。** 速さ最優先の補助モードや、preview が進んだ時点での再評価の候補として残す。英→日の方向と、会話素材での話者の崩れは未検証。
 - 費用（この比較）: 判定 5 件 約 $1.4（Anthropic）、whisper 約 $0.15（OpenAI）、Vertex は未確定。
+
+### 8.11 決定（10/29）
+
+owner の判断「品質が最優先。明確に差があるなら確定して進めてよい」（10/29）に基づき、**主経路を B（gpt-live-1・plain-q・marin）に確定**した。根拠は §3（A/B/B2/D'）、§8.5（Gemini 原稿）、§8.7（Claude 第二審判）、§8.9（圧縮直後）、§8.10（Gemini Live Translate）。製品側は Node 版 relay（`examples/relay-local`）の既定を `TRANSLATE_PROVIDER=live` にし、A は `TRANSLATE_PROVIDER=translate` で残す。adapter（`packages/provider-openai-live`）の既定は元から `plain-q`・`marin`。実機受入は owner 判断で後日。

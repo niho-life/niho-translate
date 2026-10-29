@@ -61,7 +61,7 @@ protocol v1は全server eventに接続単位で単調増加する `deliveryId` �
 
 ## 未完了の受入
 
-provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信しました。合成音声の時刻・金額・否定は初回両方向で一致し、繰り返しの1回では金額の自動判定が不一致でした。意味精度の人による確認、実iPhone・ホスト認可/予算を含むroom全体、Node版relayを使うホスト側の配備・接続先更新と実回線watchdog、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。GPT-Live adapter（`packages/provider-openai-live`）はfake transportの自動テストと合成音声1回の実API smoke（訳音声・訳字幕・原文字幕の受信と`session.closed`までのdrain）までで、実iPhone・room全体・60分連続運転は未確認です。
+provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信しました。合成音声の時刻・金額・否定は初回両方向で一致し、繰り返しの1回では金額の自動判定が不一致でした。意味精度の人による確認、実iPhone・ホスト認可/予算を含むroom全体、Node版relayを使うホスト側の配備・接続先更新と実回線watchdog、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。2026-10-29の比較評価（[評価文書](docs/translation-quality-eval-2026-10-28.md)）で主経路をGPT-Live（`gpt-live-1`・通訳指示`plain-q`・声`marin`）に確定し、Node版relayの既定を`TRANSLATE_PROVIDER=live`にしました。現行の`gpt-realtime-translate`は`TRANSLATE_PROVIDER=translate`で選べます。GPT-Live adapter（`packages/provider-openai-live`）自体はfake transportの自動テストと合成音声1回の実API smoke（訳音声・訳字幕・原文字幕の受信と`session.closed`までのdrain）までで、同じAPI・同じ指示文の研究ハーネスでは60分連続運転と主要5窓の品質判定を済ませましたが、adapterの実iPhone・room全体・60分連続運転は未確認です。
 
 ## 権利
 

@@ -17,7 +17,7 @@ export const MIN_TEXT_CHARS = 2;
 const MIN_REPAIR_MS = 200;
 
 // Record にしておくと engine.ts の型が増えたときに型検査で気づける。
-const FACT_TYPE_KEYS: Readonly<Record<FactType, true>> = { number: true, time: true, amount: true, negation: true, place: true, proper_noun: true, condition: true, subject: true, tense: true };
+const FACT_TYPE_KEYS: Readonly<Record<FactType, true>> = { number: true, time: true, amount: true, negation: true, place: true, legal_right: true, proper_noun: true, condition: true, subject: true, tense: true };
 const KIND_KEYS: Readonly<Record<ReferenceSegment["kind"], true>> = { statement: true, question: true, backchannel: true, fragment: true };
 export const FACT_TYPES = Object.keys(FACT_TYPE_KEYS) as readonly FactType[];
 export const SEGMENT_KINDS = Object.keys(KIND_KEYS) as ReadonlyArray<ReferenceSegment["kind"]>;

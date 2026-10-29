@@ -8,8 +8,8 @@ import type { TranscriptExcerpt } from "./transcript.ts";
 import type { TranscriptKind } from "./args.ts";
 import { FACT_TYPES, SEGMENT_KINDS } from "./validate.ts";
 
-/** v4: D（転記）の種類で説明を切り替える（human = 人手未校正の転記、gemini = Gemini の文字起こし）。 */
-export const PROMPT_VERSION = "reference-draft-v4";
+/** v5: D（転記）の種類の説明に加え、不動産の権利形態を独立した重大事実へ分類する。 */
+export const PROMPT_VERSION = "reference-draft-v5";
 
 export type SourceKey = "A" | "B" | "C" | "D";
 export const SOURCE_KEYS: readonly SourceKey[] = ["A", "B", "C", "D"];
@@ -169,6 +169,7 @@ window の中で話されたすべての発話を、話された順の区間（s
 - amount: 金額・価格・面積・距離など単位付きの量
 - negation: 否定・不可能・禁止の述語（ありません、できない）
 - place: 地名。国・都市・市町村・地域・駅・海岸・施設のある場所の名前（アメリカ、横浜、湘南 など）。同じ語は window の中で必ず同じ型にする。
+- legal_right: 不動産の権利形態（所有権、賃借権、借地権など）。売買・賃貸という取引の説明とは区別する。
 - proper_noun: 地名以外の固有名詞（人名・会社名・組織名・サービス名・作品名）
 - condition: 条件・仮定の節（〜だったら、〜の場合は、〜すれば）
 - subject: 動作や判断の主体が明示されているときのその語（私、オーナーさんが、外国の方が）

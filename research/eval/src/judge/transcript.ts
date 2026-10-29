@@ -56,7 +56,8 @@ export function subtitleWords(deltas: ReadonlyArray<TranscriptDelta>): OutputWor
     for (let i = 0; i < delta.text.length; i += 1) times.push(delta.t);
   }
   const words: OutputWord[] = [];
-  const wordPattern = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*[.,!?;:]*/gu;
+  // 金額・符号・小数点・桁区切りは一語として渡す。小数点で文を分割しない。
+  const wordPattern = /(?:[$€£¥][+\-−]?|[+\-−][$€£¥]?)?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:[.,]\d+)?)[%％]?[.,!?;:]*|[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*[.,!?;:]*/gu;
   for (const match of joined.matchAll(wordPattern)) {
     const startMs = times[match.index ?? 0] ?? 0;
     words.push({ i: words.length, text: match[0], startMs, endMs: startMs + 100 });

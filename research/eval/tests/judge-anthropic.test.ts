@@ -80,7 +80,10 @@ describe("Codex subscription judge options", () => {
   });
 
   it("accepts an explicitly approximate subtitle timeline", () => {
-    expect(parseJudgeArgs([...base, "--word-source", "subtitle"]).wordSource).toBe("subtitle");
+    const args = parseJudgeArgs([...base, "--word-source", "subtitle"]);
+    expect(args.wordSource).toBe("subtitle");
+    expect(args.outName).toBe("judgement-subtitle.json");
+    expect(parseJudgeArgs([...base, "--word-source", "subtitle", "--out-name", "custom.json"]).outName).toBe("custom.json");
     expect(() => parseJudgeArgs([...base, "--word-source", "invalid"])).toThrow(/word-source/);
     expect(() => parseJudgeArgs([...base, "--effort", "high"])).toThrow(/effort/);
   });

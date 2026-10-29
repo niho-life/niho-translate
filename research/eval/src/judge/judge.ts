@@ -102,10 +102,10 @@ export function parseJudgeArgs(argv: ReadonlyArray<string>): JudgeArgs {
   if (backend === "codex" && effort !== null) throw new Error("--effort is not supported for codex app-server");
   const allowed = backend === "agy" ? AGY_EFFORTS : backend === "anthropic" ? ANTHROPIC_EFFORTS : EFFORTS;
   if (effort !== null && !allowed.has(effort)) throw new Error(`--effort must be one of ${[...allowed].join(", ")} for ${backend}`);
-  const outName = values.get("--out-name") ?? "judgement.json";
-  outputNames(outName);
   const wordSource = values.get("--word-source") ?? "audio";
   if (wordSource !== "audio" && wordSource !== "subtitle") throw new Error("--word-source must be audio or subtitle");
+  const outName = values.get("--out-name") ?? (wordSource === "subtitle" ? "judgement-subtitle.json" : "judgement.json");
+  outputNames(outName);
   const asrBackend = values.get("--asr-backend") ?? "openai";
   if (asrBackend !== "openai" && asrBackend !== "local") throw new Error("--asr-backend must be openai or local");
   const whisperModel = values.get("--whisper-model") ?? null;

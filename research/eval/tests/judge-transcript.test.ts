@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agreementBandFor, promptWindowFor, wordsFromWhisper } from "../src/judge/asr.ts";
+import { groupSentences } from "../src/judge/sentences.ts";
 import {
   asrTokens,
   computeAgreement,
@@ -45,6 +46,12 @@ describe("parseTranscript / tokens", () => {
     expect(words.find((w) => w.text === "Kamakura")?.startMs).toBe(9000);
     expect(words.find((w) => w.text === "tomorrow.")?.startMs).toBe(2000);
     expect(words.map((w) => w.i)).toEqual(words.map((_, i) => i));
+  });
+
+  it("keeps currency, sign, grouping and decimals for fact judgement without splitting a sentence", () => {
+    const words = subtitleWords(parseTranscript("1000\tThe price is $3,000.50, not €3,000.50; the change is -2%."));
+    expect(words.map((w) => w.text)).toEqual(["The", "price", "is", "$3,000.50,", "not", "€3,000.50;", "the", "change", "is", "-2%."]);
+    expect(groupSentences(words).map((s) => s.text)).toEqual(["The price is $3,000.50, not €3,000.50; the change is -2%."]);
   });
 
   it("normalizes case, apostrophes and dashes", () => {

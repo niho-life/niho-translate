@@ -85,7 +85,7 @@ Qwenを再試験する場合: [公式無料枠ガイド](https://www.alibabaclou
    - ASR 語とエンジン字幕の一致率（`asrAgreement`、全体と 1 分ごと）を記録し、60% 未満の分は gpt-4o-transcribe で再確認して report.md に「エンジンの音声が字幕と違う」か「判定不能」かを記す。一致率が低い分は、聞き手に字幕と違う英語が流れた候補として扱う。
    - `--effort`（判定モデルの推論の深さ）は `judge.effort` に記録する。
 5. `aggregate` は `JudgeAggregate`。`within8s` は statement/question の分母に対する割合。`report.md` は private（本文を含む）、stdout は aggregate のみ。`report.md` の「1分ごとの意味と遅延」は原文区間の開始時刻で集計し、未対応を8秒以内率と意味平均の分母に残す。長い連続音声で遅延や欠落が後半へ偏るかを見るための診断であり、[IWSLT 2026のYAAL](https://aclanthology.org/2026.iwslt-1.3/)と同じ指標ではない。p50/p95は対応できた区間の語時刻のみで計算する。
-6. `src/aggregate.ts --runs <runDir...>` は複数 run の `summary.json` と `judgement.json` から Markdown 表（数値のみ）を作る。
+6. `src/aggregate.ts --runs <runDir...>` は複数 run の `summary.json` と音声 ASR 由来の `judgement.json` から Markdown 表（数値のみ）を作る。`--word-source subtitle` の既定出力は `judgement-subtitle.json` とし、過去に `judgement.json` に保存された `judge.asr=engine-subtitle` も音声品質・遅延の集計対象から除く。
 
 ### 重要事実の音声遅延 `L_fact`
 

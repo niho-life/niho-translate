@@ -132,6 +132,16 @@ describe("buildRows", () => {
     expect(rows[0]?.firstAudioOutMs).toBeNull();
   });
 
+  it("excludes old subtitle-proxy judgements from audio quality and latency columns", () => {
+    const proxy = judgement([seg("proxy", 1_000, { meaning: 3 })]);
+    const proxyRun: RunRecord = {
+      summary: summary({ engineId: "openai-translate" }),
+      judgement: { ...proxy, judge: { ...proxy.judge, asr: "engine-subtitle" } },
+    };
+    const row = buildRows([runs[0]!, proxyRun])[0]!;
+    expect(row).toMatchObject({ runs: 2, judgedRuns: 1, n: 2, lStartP50Ms: 3_000, within8s: 0.5, meaningMean: 2 });
+  });
+
   it("renders a numeric Markdown table without text or paths", () => {
     const table = renderTable(rows);
     const lines = table.split("\n");

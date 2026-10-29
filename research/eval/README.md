@@ -87,6 +87,23 @@ Qwenを再試験する場合: [公式無料枠ガイド](https://www.alibabaclou
 5. `aggregate` は `JudgeAggregate`。`within8s` は statement/question の分母に対する割合。`report.md` は private（本文を含む）、stdout は aggregate のみ。`report.md` の「1分ごとの意味と遅延」は原文区間の開始時刻で集計し、未対応を8秒以内率と意味平均の分母に残す。長い連続音声で遅延や欠落が後半へ偏るかを見るための診断であり、[IWSLT 2026のYAAL](https://aclanthology.org/2026.iwslt-1.3/)と同じ指標ではない。p50/p95は対応できた区間の語時刻のみで計算する。
 6. `src/aggregate.ts --runs <runDir...>` は複数 run の `summary.json` と `judgement.json` から Markdown 表（数値のみ）を作る。
 
+### 重要事実の音声遅延 `L_fact`
+
+`src/fact-latency.ts` は、原文ASRの語時刻と訳**音声**ASRの語時刻に、確認した事実ごとの語indexを付けて計算する。`L_fact = 訳音声でその事実を話し始めた時刻 − 原音声でその事実を話し終えた時刻`。発話開始を基準にした `L_factOnset` も別に出す。`verdict=wrong/omitted/unclear` は速度の成功例から除外し、その件数を残す。`preSourceEnd` は原音声で事実が完成するより先に英語で発話した件数で、正しい文面でも推測の可能性がある。日本語の文末の否定など、意味を決める語が現れる前から遅延を測ってしまう問題を避けるためである。
+
+annotation JSON は `sourceId` と `anchors` 配列を持つ。各要素に `segmentId`、`factIndex`、`sourceWordLo/Hi`、`targetWordLo/Hi`（省略なら両方 `null`）、`verdict`、`review`（`asr-reviewed` または `audio-reviewed`）を記す。語indexは各ASRの `words` 配列の0始まりで、数値を目視確認する。**否定は `can't` / `don't`、数量は `half` など、訳の事実が確定する最初の語を `targetWordLo` とする。**「I」や「we」など事実がまだ分からない前置き語を使うと早すぎる値になる。原文と訳文・index・結果はすべてprivateに保管し、公開PRには集計だけを書ける。`asr-reviewed` は実音声を人が聴いていないので、正解時刻とみなさない。
+
+```sh
+EVAL_PRIVATE_DIR=/path/to/private/eval node --experimental-transform-types research/eval/src/fact-latency.ts \
+  --reference /path/to/private/eval/reference/source.json \
+  --source-asr /path/to/private/eval/work/source-whisper1.json \
+  --target-asr /path/to/private/eval/runs/run-id/output-words-local.json \
+  --anchors /path/to/private/eval/work/fact-anchors.json \
+  --out /path/to/private/eval/runs/run-id/fact-latency.json
+```
+
+この計測は選択した事実の診断であり、全発話の品質やイヤフォン到達時刻を代表しない。欠落・誤訳を含めた全区間評価は上記の判定器と併用する。
+
 ## 7. 実行
 
 ```sh

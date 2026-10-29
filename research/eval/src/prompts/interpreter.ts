@@ -1,8 +1,8 @@
 import { glossaryLines } from "./glossary.ts";
 import type { Language } from "../engine.ts";
 
-export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "domain-glossary-q" | "compact-q" | "early-safe-q" | "brisk-q";
-export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "domain-glossary-q", "compact-q", "early-safe-q", "brisk-q"];
+export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "glossary-q" | "domain-glossary-q" | "compact-q" | "early-safe-q" | "brisk-q";
+export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "glossary-q", "domain-glossary-q", "compact-q", "early-safe-q", "brisk-q"];
 
 const LANGUAGE_NAME: Record<Language, string> = { ja: "Japanese", en: "English" };
 
@@ -58,6 +58,8 @@ export function buildInterpreterInstructions(preset: InterpreterPreset, source: 
     `Glossary (use these renderings when the term appears):`,
     glossaryLines(),
   ];
+  // Isolate glossary from the broader domain paragraph for controlled A/B tests.
+  if (preset === "glossary-q") return [...base, ...twoParty, ...glossary, ...contextLines].join("\n");
   if (preset === "domain-glossary-q") return [...base, ...twoParty, ...domain, ...glossary, ...contextLines].join("\n");
   return [...base, ...domain, ...glossary, ...contextLines].join("\n");
 }

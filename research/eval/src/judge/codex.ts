@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import type { Usage } from "./openai.ts";
 
-const TIMEOUT_MS = 180_000;
+// Large, audio-grounded batches can exceed three minutes on the subscription route.
+// Keep the timeout per batch bounded while allowing the stronger judge to finish.
+const TIMEOUT_MS = 360_000;
 
 export async function runCodexJudge(args: {
   readonly model: string;

@@ -137,8 +137,25 @@ Qwenはこの会見では速いが、「私」という主体や立場が抜け�
 
 [公式のプレビュー制限](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)では、ChatGPTプラン利用経路で音声入力・Transcription APIは非対応。従ってCodex app-serverだけで音声→英語音声の5分リプレイは置き換えられない。[ChatGPT契約者向けAPIクレジット](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)は別の制度で、対象のPro $200プランは月$200、GPT-Live・Realtime APIにも適用される。ただし、契約7日以上、同じメール、API組織Owner、契約と組織のリンクが必要で、初回は請求期間の残日数で按分される。実際の付与を請求画面で確認するまでは、予算として計上しない。
 
+同日、現在のアカウントの資格を読み取り確認すると `eligible:false` / `not_qualified` だった。購入済みAPI残高をPro特典と混同しない。判定理由の詳細は表示されていないため、音声実験は既存の有料API枠からの支出として扱う。
+
 ## 再現手順と次の判定
 
 `research/eval/README.md` の実時間リプレイ、参考原稿、判定コマンドを使う。音声・原稿・出力全文はGit管理外の研究資料を参照する。公開音声は上記のURLから取得可能。`--judge-backend codex --skip-asr` は**既存のv2 `output-words.json` が無いと失敗する**ため、意図しないASR課金は発生しない。ゼロAPI費用の下見には `--judge-backend codex --word-source subtitle` を指定し、遅延値は発話開始の評価に用いない。
 
 次の判定ではJ-WAVE窓の訳音声を別系統の音声認識または聴取で照合し、字幕代理時刻と音声時刻を混ぜない。プロンプト改善を採用する閾値は、少なくとも独立した複数録音・複数反復で重大な意味誤りを増やさず、p95の改善が再現することとする。
+
+## 重要事実が実際に訳音声へ出るまで（2026-10-29 追試）
+
+公開演説の同一5分窓から、金額・期間・地名・否定など7件を選び、原音声と訳音声のASR単語時刻を対応づけた。`L_fact = 英語で事実を話し始めた時刻 − 日本語でその事実を言い終えた時刻`。誤訳や欠落は「速く訳せた」件数に入れず、別に数える。測定コードとannotation形式は[評価ハーネス](../research/eval/README.md#重要事実の音声遅延-l_fact)に追加した。
+
+| 同一7事実、各エンジン1run | 正しく訳出し時刻も対応 | 誤訳 | 欠落 | 正しい事実の`L_fact` p50 / p95 |
+|---|---:|---:|---:|---:|
+| GPT-Live `plain-q` | 7 | 0 | 0 | 13.83秒 / 23.51秒 |
+| Qwen3.8 LiveTranslate既定 | 5 | 1 | 1 | 5.45秒 / 10.51秒 |
+
+Qwenの誤訳は将来の5年間を過去の5年間として述べた箇所、欠落は地名の箇所。Qwenの正しい事実は比較的早いが、**誤った事実を早く話しても通訳品質の改善には数えられない**。GPT-Liveの長い遅延には、先行区間の訳を話してから当該事実を話す時間も含まれる。選んだ7件だけの診断であり、全区間のp95ではない。日本語は`whisper-1`、英語訳音声はローカルwhisper.cppの語時刻で、両者の本文・時刻を文字ベースで見直したが音声を人が校正していない（`asr-reviewed`）。正確な耳到達時刻や人手の意味採点ではない。annotationと個別対応はGit管理外の研究フォルダに置く。
+
+## DeepL Voice比較の利用条件
+
+[DeepL Voice APIの公式説明](https://developers.deepl.com/docs/voice/overview)は、原文転写・訳文・訳音声を単一WebSocket sessionから受けられ、`spoken_terms`と訳語glossaryを別々に設定できるとしている。日本語では途中転写の区切り方により用語一致が漏れ得るため、用語の命中率を訳音声で測る必要がある。一方、[DeepLのプラン説明](https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans)で無料Developer枠に音声翻訳はなく、[契約条件](https://www.deepl.com/en/pro-license)ではspeech-to-speechを対象プランに限定する。現在のPC環境にはDeepL APIキーがない。**訳音声を同条件で試せる契約資格を確認するまで、DeepLの精度や速度を既定候補として評価しない。**

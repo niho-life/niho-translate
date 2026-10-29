@@ -157,6 +157,8 @@ export interface SummaryInput {
   readonly frames: { readonly count: number; readonly maxLateMs: number; readonly meanLateMs: number };
   readonly fatalCode: string | null;
   readonly drained: boolean;
+  readonly finishEndT: number;
+  readonly lastVoicedAudioT: number | null;
   readonly finishWaitMs: number;
   readonly costUsd: number | null;
   readonly wallMs: number;
@@ -164,6 +166,7 @@ export interface SummaryInput {
 
 export function buildSummary(input: SummaryInput): RunSummary {
   const queue = queueSummary(input.played);
+  const tailVoicedGapMs = input.lastVoicedAudioT === null ? null : roundMs(input.finishEndT - input.lastVoicedAudioT);
   const outputAudioMs = input.played.reduce((sum, chunk) => sum + chunk.durationMs, 0);
   const outputTranscriptChars = input.transcriptOut.reduce((sum, entry) => sum + Array.from(entry.text).length, 0);
   return {
@@ -198,6 +201,8 @@ export function buildSummary(input: SummaryInput): RunSummary {
     },
     fatal: input.fatalCode === null ? null : { code: input.fatalCode },
     drained: input.drained,
+    tailVoicedGapMs,
+    tailTruncationRisk: tailVoicedGapMs !== null && tailVoicedGapMs < 2_000,
     finishWaitMs: roundMs(input.finishWaitMs),
     costUsdEstimate: input.costUsd === null ? null : Math.round(input.costUsd * 1_000_000) / 1_000_000,
     wallMs: roundMs(input.wallMs),

@@ -107,6 +107,9 @@ export interface RunSummary {
   readonly frames: { readonly count: number; readonly maxLateMs: number; readonly meanLateMs: number };
   readonly fatal: { readonly code: string } | null;
   readonly drained: boolean;
+  /** Last voiced packet to session close; near-zero means the tail may have cut off speech. */
+  readonly tailVoicedGapMs?: number | null;
+  readonly tailTruncationRisk?: boolean;
   readonly finishWaitMs: number;
   readonly costUsdEstimate: number | null;
   readonly wallMs: number;

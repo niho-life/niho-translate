@@ -175,6 +175,8 @@ describe("buildSummary", () => {
       frames: { count: 130, maxLateMs: 3.21, meanLateMs: 0.44 },
       fatalCode: null,
       drained: true,
+      finishEndT: 30_000,
+      lastVoicedAudioT: 4_400,
       finishWaitMs: 1_234.5,
       costUsd: 0.0147333333,
       wallMs: 33_000,
@@ -186,6 +188,8 @@ describe("buildSummary", () => {
       outputTranscriptChars: 10,
       fatal: null,
       drained: true,
+      tailVoicedGapMs: 25_600,
+      tailTruncationRisk: false,
       costUsdEstimate: 0.014733,
       engineReadyMs: 812.3,
       frames: { count: 130, maxLateMs: 3.2, meanLateMs: 0.4 },
@@ -194,5 +198,21 @@ describe("buildSummary", () => {
     expect(summary.queue).toMatchObject({ over2000Count: 2, over2000TotalMs: 500 });
     expect(summary.perMinute).toHaveLength(1);
     expect(JSON.stringify(summary)).not.toContain("Five");
+  });
+
+  it("flags output still arriving when a session is closed", () => {
+    const base = {
+      runId: "run", engineId: "openai-live", sourceId: "src",
+      config: { engineId: "openai-live", sourceLanguage: "ja" as const, targetLanguage: "en" as const, frameMs: 200, options: {} },
+      windowStartSec: 0, windowEndSec: 10, durationMs: 10_000, tailSilenceMs: 8_000,
+      engineReadyMs: 100, transcriptOut: [], frames: { count: 90, maxLateMs: 0, meanLateMs: 0 },
+      fatalCode: null, drained: true, finishEndT: 18_850, lastVoicedAudioT: 18_500, finishWaitMs: 850, costUsd: null, wallMs: 19_000,
+    };
+    const summary = buildSummary({ ...base, played: idealPlayback([{ t: 18_500, bytes: 200 * MS }]) });
+    expect(summary.tailVoicedGapMs).toBe(350);
+    expect(summary.tailTruncationRisk).toBe(true);
+    expect(summary.drained).toBe(true); // Transport close alone cannot prove a complete sentence.
+    const silentTail = buildSummary({ ...base, lastVoicedAudioT: 14_000, played: idealPlayback([{ t: 18_500, bytes: 200 * MS }]) });
+    expect(silentTail.tailTruncationRisk).toBe(false);
   });
 });

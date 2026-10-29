@@ -51,7 +51,7 @@ const ENGINE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/u;
 const OPTION_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 
 const USAGE = `usage: run.ts --wav <abs> --window <startSec>:<endSec> --source-id <id> --engine <id>
-  [--frame-ms 100|200] [--option k=v ...] [--tail-silence-sec 6] [--finish-timeout-sec 20]
+  [--frame-ms 100|200] [--option k=v ...] [--tail-silence-sec 20] [--finish-timeout-sec 20]
   [--out-root <abs>] [--source ja|en] [--target ja|en]
 `;
 
@@ -104,7 +104,7 @@ export function parseCliArgs(argv: ReadonlyArray<string>): CliArgs {
   if (!ENGINE_ID_PATTERN.test(engineId)) throw new HarnessError("UNKNOWN_ENGINE");
   const frameMs = parseNumberFlag(values.get("frame-ms"), 200, "INVALID_FRAME_MS");
   if (!FRAME_MS_CHOICES.includes(frameMs)) throw new HarnessError("INVALID_FRAME_MS");
-  const tailSilenceSec = parseNumberFlag(values.get("tail-silence-sec"), 6, "INVALID_TAIL_SILENCE");
+  const tailSilenceSec = parseNumberFlag(values.get("tail-silence-sec"), 20, "INVALID_TAIL_SILENCE");
   if (tailSilenceSec > 60) throw new HarnessError("INVALID_TAIL_SILENCE");
   const finishTimeoutSec = parseNumberFlag(values.get("finish-timeout-sec"), 20, "INVALID_FINISH_TIMEOUT");
   if (finishTimeoutSec < 1 || finishTimeoutSec > 600) throw new HarnessError("INVALID_FINISH_TIMEOUT");
@@ -208,6 +208,7 @@ export class RunRecorder implements EngineSink {
   private readonly records: Recorded[] = [];
   private sealed = false;
   private voicedSeen = false;
+  lastVoicedAudioAt: number | null = null;
   fatalCode: string | null = null;
   incomplete = false;
 
@@ -228,9 +229,10 @@ export class RunRecorder implements EngineSink {
     const at = this.now();
     const copy = Buffer.from(pcm.subarray(0, evenBytes));
     this.records.push({ kind: "audio", at, pcm: copy });
-    if (!this.voicedSeen) {
-      const onset = firstVoicedSample(copy, VOICED_PEAK);
-      if (onset !== undefined) {
+    const onset = firstVoicedSample(copy, VOICED_PEAK);
+    if (onset !== undefined) {
+      this.lastVoicedAudioAt = at;
+      if (!this.voicedSeen) {
         this.voicedSeen = true;
         // 本文なしの印。t は chunk の到着時刻、offsetMs はその chunk 内で最初に閾値を超えた位置。
         this.records.push({
@@ -552,6 +554,8 @@ export async function runHarness(argv: ReadonlyArray<string>, env: NodeJS.Proces
       frames,
       fatalCode: recorder.fatalCode,
       drained,
+      finishEndT: finishEndAt - (t0 ?? startSettledAt),
+      lastVoicedAudioT: recorder.lastVoicedAudioAt === null ? null : recorder.lastVoicedAudioAt - (t0 ?? startSettledAt),
       finishWaitMs: finishEndAt - finishBeginAt,
       costUsd,
       wallMs: runEndAt - runStartAt,

@@ -29,7 +29,7 @@ describe("parseCliArgs", () => {
       engineId: "openai-live",
       frameMs: 200,
       options: {},
-      tailSilenceSec: 6,
+      tailSilenceSec: 20,
       finishTimeoutSec: 20,
       outRoot: undefined,
       source: "ja",
@@ -275,8 +275,11 @@ describe("RunRecorder", () => {
     now = 300;
     recorder.outputAudio(voiced);
     recorder.outputAudio(voiced);
+    now = 600;
+    recorder.outputAudio(quiet);
     const diags = recorder.build(0).events.filter(event => event.type === "diag");
     expect(diags).toEqual([{ type: "diag", t: 300, kind: "harness.first_voiced_audio", data: { offsetMs: 2, thresholdPeak: VOICED_PEAK } }]);
+    expect(recorder.lastVoicedAudioAt).toBe(300);
     expect(firstVoicedSample(quiet, VOICED_PEAK)).toBeUndefined();
   });
 });

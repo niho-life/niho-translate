@@ -408,7 +408,9 @@ function installInterruptHandler(): { readonly requested: boolean; dispose(): vo
 export async function runHarness(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv): Promise<number> {
   const args = parseCliArgs(argv);
   const apiKey = (env.OPENAI_API_KEY ?? "").trim();
-  if (!apiKey) throw new HarnessError("OPENAI_API_KEY_MISSING");
+  if (!apiKey && args.engineId !== "gemini-live-translate" && args.engineId !== "qwen-live-translate") {
+    throw new HarnessError("OPENAI_API_KEY_MISSING");
+  }
   const outRoot = resolveOutRoot(args.outRoot, env.EVAL_PRIVATE_DIR);
   const factory = await loadEngineFactory(args.engineId);
   const config: EngineConfig = {
@@ -424,7 +426,12 @@ export async function runHarness(argv: ReadonlyArray<string>, env: NodeJS.Proces
   try {
     // option の検査はここで（接続より前）。
     const googleAccessToken = (env.GOOGLE_ACCESS_TOKEN ?? "").trim();
-    engine = factory(config, recorder, { openaiApiKey: apiKey, ...(googleAccessToken ? { googleAccessToken } : {}) });
+    const qwenApiKey = (env.DASHSCOPE_API_KEY ?? "").trim();
+    engine = factory(config, recorder, {
+      openaiApiKey: apiKey,
+      ...(googleAccessToken ? { googleAccessToken } : {}),
+      ...(qwenApiKey ? { qwenApiKey } : {}),
+    });
   } catch (error) {
     if (error instanceof EngineError || error instanceof HarnessError) throw error;
     throw new HarnessError("ENGINE_CONFIG_INVALID");

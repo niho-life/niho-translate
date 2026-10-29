@@ -12,7 +12,7 @@
 |---|---|---|
 | `src/engine.ts` | エンジン契約・スキーマ（本文書と一体。変更はメイン担当のみ） | main |
 | `src/prompts/` | 通訳指示プリセットと合成用語集（変更はメイン担当のみ） | main |
-| `src/run.ts`, `src/audio.ts`, `src/timeline.ts`, `src/pacing.ts`, `src/engines/openai-translate.ts`, `src/engines/openai-live.ts`, `src/engines/openai-realtime.ts`, `src/engines/gemini-live-translate.ts`, `src/engines/index.ts` | ハーネス本体と OpenAI 3 エンジン＋Gemini Live Translate | agent A |
+| `src/run.ts`, `src/audio.ts`, `src/timeline.ts`, `src/pacing.ts`, `src/engines/openai-translate.ts`, `src/engines/openai-live.ts`, `src/engines/openai-realtime.ts`, `src/engines/gemini-live-translate.ts`, `src/engines/qwen-live-translate.ts`, `src/engines/index.ts` | ハーネス本体と OpenAI 3 エンジン＋Gemini / Qwen Live Translate | main / agent A |
 | `src/engines/cascade/**` | カスケード型（ASR→区切り→LLM訳→TTS）の試作。`src/engines/cascade/index.ts` が `EngineFactory` を export する | agent B |
 | `src/reference/**` | 正解原稿（時刻付き日本語区間）作成ツール | agent C |
 | `src/judge/**`, `src/aggregate.ts` | 判定器（EN 単語時刻→区間対応→意味採点）と集計 | agent D |
@@ -55,6 +55,9 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 | `openai-realtime` | Realtime API `session.update {type: realtime}`、`output_modalities: ["audio"]`、`audio.input.turn_detection`、`instructions`。`response.output_audio.delta` / `response.output_audio_transcript.delta` を受ける | `model=gpt-realtime-2.1|gpt-realtime-2.1-mini`（2.1）、`vad=semantic:high|semantic:medium|semantic:low|server:<silence_ms>`（semantic:high）、`interrupt=0|1`（0）、`preset`（domain）、`inputTranscription=0|1`（0） |
 | `cascade` | `gpt-live-transcribe`（streaming ASR）→ 日本語の節単位の区切り → LLM 訳（直前文脈つき）→ streaming TTS。agent B の設計書 `src/engines/cascade/README.md` を正とする | B が定義（`asrDelay`, `segmenter`, `llm`, `tts`, `context`, `glossary` など） |
 | `gemini-live-translate` | Vertex AI の Live API `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`（`global`）。`setup` に `model: projects/<project>/locations/global/publishers/google/models/gemini-3.5-live-translate-preview`、`generationConfig.translationConfig.targetLanguageCode`、`inputAudioTranscription` / `outputAudioTranscription`（setup 直下）。音声は 16 kHz に間引いて `realtimeInput.audio`、終端は `realtimeInput.audioStreamEnd`。`serverContent.modelTurn.parts[].inlineData`（24 kHz）と `outputTranscription` / `inputTranscription` を受ける。通訳専用モデルで instructions・voice は無い。認証は `GOOGLE_ACCESS_TOKEN`（`gcloud auth print-access-token`） | `project`（既定 `GOOGLE_CLOUD_PROJECT`）、`location`（global）、`echo=true|false`（false） |
+| `qwen-live-translate` | Alibaba Cloud Model Studio の `qwen3.8-livetranslate-flash-realtime`。シンガポール/北京のworkspace別WebSocketへ16 kHz PCMを継続送信し、24 kHz PCM訳音声・原文/訳文deltaを受ける。終端は `session.finish`→`session.finished`。公式仕様のhotword辞書を比較できる。入力言語はモデルの自動判定。製品経路には未接続で、実API疎通は未検証 | `region=singapore|beijing`（singapore）、`hotwords=off|env`（off）。`DASHSCOPE_API_KEY`、`QWEN_WORKSPACE_ID`を環境に設定。`hotwords=env`なら`QWEN_HOTWORDS_JSON`に `{ "鎌倉": "Kamakura" }` 形式を設定。用語本文・workspace IDはCLI引数やstdoutへ渡さない |
+
+Qwenのモデル・イベント形式は[公式ガイド](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen3-5-livetranslate-flash-realtime)と[client event](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/live-translator-client-events)に合わせた。公開リポジトリには合成fixtureだけを置く。私有の会話音声をAlibabaへ送る承認は得ていないため、実行する場合もまず公開・合成音声に限定する。`QWEN_HOTWORDS_JSON`の値は記録しないが、件数はprivate eventsに記録する。原文の最終転記が途中deltaを修正した場合はprivate `events.jsonl`の`qwen.input_revision.text`へ記録する。現在の24→16 kHz変換は既存Gemini比較と同じ簡易間引きで、入力音質への影響を実API採点の前に確認する。
 
 通訳指示は `src/prompts/interpreter.ts` の `buildInterpreterInstructions(preset, source, target)`。用語集は `src/prompts/glossary.ts`（合成・公開情報のみ）。cascade も同じ用語集を ASR keywords と LLM prompt に使う。
 

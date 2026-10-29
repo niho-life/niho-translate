@@ -5,6 +5,7 @@ import type { JudgeDocument, JudgedSegment, LatencyStats, ReferenceDocument } fr
 import type { Usage } from "./openai.ts";
 import { AGREEMENT_WARN_BELOW } from "./asr.ts";
 import { crossCheckVerdict } from "./transcript.ts";
+import { minuteDiagnostics } from "./metrics.ts";
 import type { EnSentence, OutputWordsDocument } from "./types.ts";
 
 export interface ReportContext {
@@ -108,6 +109,16 @@ export function renderReport(ctx: ReportContext): string {
     `| 重大誤り（数・時刻・金額・否定・地名・条件・主体の wrong） | ${a.criticalFactErrors} |`,
     `| 型ごとの wrong | ${byType || "なし"} |`,
     `| flags | ${flags || "なし"} |`,
+    "",
+    "## 1分ごとの意味と遅延",
+    "",
+    "原文区間の開始時刻で分ける。未対応は8秒以内・意味平均の分母に残す。字幕を語時刻に使ったrunでは遅延も字幕到着の代理値。",
+    "",
+    "| 分 | 採点区間 / 未対応 | lStart p50 / p95 (s) | 8秒以内 | 意味平均 / 3 | 重大事実誤り |",
+    "|---:|---:|---:|---:|---:|---:|",
+    ...minuteDiagnostics(reference.segments, doc.segments).map((m) =>
+      `| ${m.minute} | ${m.scored} / ${m.missing} | ${sec(m.lStart.p50)} / ${sec(m.lStart.p95)} | ${pct(m.lStart.within8s)} | ${m.meaningMean?.toFixed(2) ?? "—"} | ${m.criticalFactErrors} |`,
+    ),
     "",
     "## 区間ごとの判定",
     "",

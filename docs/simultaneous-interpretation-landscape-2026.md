@@ -281,6 +281,7 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 | [ElevenLabs Realtime Translation API](https://elevenlabs.io/docs/api-reference/realtime-translation/v-1-translation-realtime)／[発表](https://elevenlabs.io/blog/realtime-translation) | `eagerness=low/medium/high` で訳出開始の慎重さを調整でき、原文・訳文テキストと訳音声を返す。2026-10時点の提供はenterprise向けalpha | 品質優先のlowと中間のmediumを比較する候補。日英対応・アクセス・保持条件の確認前に実データ試験を予定しない |
 | [Apple Live Translation](https://support.apple.com/ja-jp/123185) | 端末上で処理し、騒音時にはiPhoneを相手へ近づける運用を案内 | 録音環境・マイク位置・イヤフォン経路を、モデルの点数から切り分ける。PCのWAV試験を実機の代用にしない |
 | [OpenAI 通訳ガイド](https://developers.openai.com/cookbook/examples/voice_solutions/realtime_translation_guide)／[GPT-Live指示例](https://developers.openai.com/api/docs/guides/live-prompting) | 専用翻訳モデルはカスタムprompt・用語集を受けず、原文文字起こしはサイドカー。GPT-Liveには通訳専用の指示例がある | 現在の `gpt-live-1`＋`plain-q` を比較基準とし、背景情報の既定採用は複数録音・反復で検証する |
+| [ACL 2026の解釈行動の研究](https://aclanthology.org/2026.findings-acl.611/) | 単純な「待つ／書く」に加え、文の切り方・冗長語の省略・部分的要約・代名詞化を選ぶLLMの同時翻訳方策を評価。実験は英→中・独・日で、遅延を考慮したTTSも使う | 「早く出す」の一律指示より、意味を保って切れる位置の研究が重要。ただし日→英の音声対話と現行単一セッションAPIの内部制御を示す結果ではない。数字・否定・主体を省略してよい根拠にもならない |
 
 研究で公開された [StreamSpeech](https://github.com/ictnlp/StreamSpeech) は欧州語→英語、[Hikari](https://github.com/sbintuitions/hikari) は英語→日本語テキスト、[Voiceping のJA–EN Whisper実装](https://github.com/voiceping-ai/whisper-ja-en-speech-translation) は音声→テキスト翻訳である。いずれも現行の**日→英・連続音声→訳音声・対面通訳**をそのまま置き換える公開実装とは確認できなかった。評価器や学習方策の参考に留める。
 
@@ -305,3 +306,12 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 - [Model Studio価格表](https://www.alibabacloud.com/help/en/model-studio/model-pricing)はシンガポールの`qwen3.8-livetranslate-flash-realtime`に新規利用者向け100万トークンを掲示する。[無料枠の条件](https://www.alibabacloud.com/help/en/model-studio/new-free-quota)は90日、シンガポール限定。オーナーのコンソールで対象モデルの100万トークン残枠と超過時停止の有効化を確認した。研究用APIキーは同モデルだけに制限し、Git管理外で保管する。料金画面の反映には遅延があり得るため、実際の請求額は後日も確認する。
 - 公開J-WAVEの同一5分窓では、Qwenの意味平均2.51/3、`L_start` p50 9.26秒・p95 13.65秒、8秒以内33%、再生待ち最大12.34秒。GPT-Live標準はそれぞれ2.69/3、7.94秒・13.52秒、49%、0.39秒。別の公開会見5分ではQwenが速い（p50 5.39秒、8秒以内96%）反面、意味2.21/3・欠落5件・再生待ち最大5.66秒。GPT-Liveは遅い（p50 10.20秒、8秒以内32%）が意味2.86/3・欠落0件だった。両方とも同じローカル音声認識と判定器で訳音声を採点した。詳しくは[連続音声の評価記録](public-audio-software-evaluation-2026-10-29.md)。各録音1runで優劣を確定しない。
 - 次は独立の公開録音、用語hotwordの有無、必要なら別の話者検出設定で再現性を調べる。**私有の不動産対談をAlibabaへ送る許可は得ていない**。研究用アダプターは製品経路に未接続で、現在の製品既定は変えない。
+
+### 7.4 「世界水準まで精度を磨き切った」と言えない理由
+
+1. 現在の参考原稿と訳音声の語時刻は主にASRと機械判定による。対談中の質問・主体・否定・固有名詞を日英話者が原音声と訳音声でブラインド採点しておらず、意味平均点を製品の正確率と解釈できない。誤りの疑いがある6区間について、基準と背景ありの条件名を隠した短い音声18本の聴取パックをGit管理外に準備した。
+2. 短い背景・用語・訳出タイミングを独立に変えた同一5分窓では、品質と速度の改善が再現していない。条件ごと1runで、同じ録音への最適化は過学習し得る。別話者・別話題・騒音・重なり発話でも事実誤り率と聞き取りやすさを比較する必要がある。
+3. 製品既定のGPT-Liveは、公式指示に質問を質問として訳す規則があっても質問の回答化が残った。[OpenAIの通訳実装ガイド](https://developers.openai.com/cookbook/examples/voice_solutions/realtime_translation_guide)も、汎用音声モデルが問いに答えてしまう場合があると説明する。自動採点ではGPT-Liveが専用翻訳モデルを上回ったが、対面会話の質問・主体について両モデルの訳音声を同じ日英評価者が比較する余地がある。
+4. DeepL Voiceの認識用用語と訳語glossary、ElevenLabsの慎重な出力設定は利用資格がないため実測できていない。公開仕様から日→英の優劣を断定しない。端末マイク・Bluetooth・イヤフォンの耳到達時刻は別の実機ゲートである。
+
+採用順は品質を先に置く。まず人手で正しい原文と意味上の重大誤りを確定し、その上で独立録音・複数runの音声遅延を比較する。モデルの切り替えや新しい分割アルゴリズムは、その比較で既定を上回った場合に限る。

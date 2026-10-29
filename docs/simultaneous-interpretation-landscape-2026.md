@@ -297,3 +297,11 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 [IWSLT 2026 の長時間音声評価](https://aclanthology.org/2026.iwslt-1.3/)は、音声の語時刻と意味対応で遅延を測り、長い音声では遅延が蓄積し得ることを報告している。上の1分表はこの問題をNIHOの既存指標で診断するもので、論文のYAALなどを実装したものではない。[WMT 2026 の人間と機械の同時通訳比較](https://aclanthology.org/2026.wmt-main.30/)が扱う内容・提示・文体の違いも踏まえ、最終採否では数字・否定・主体の人手確認と、聞き手に分かる英語かの盲検を残す。自動判定の点数だけで製品品質を保証しない。
 
 現行の公開音声5分試験では `gpt-live-1` の意味平均2.69/3に対し、音声基準の `L_start` はp50 7.94秒、p95 13.52秒、8秒以内49%だった。別の私有対談では6runのうち1runで対応38区間中24件が8秒超、理想再生キュー最大0.39秒だった。参考原稿・語対応は人手校正前で、いずれも実機の耳到達ではない。**現在の意味と遅延を最高水準・製品受入済みとは扱わず、次の比較の基準線にする。** 根拠と限界は[連続音声の評価記録](public-audio-software-evaluation-2026-10-29.md)にある。
+
+### 7.3 Qwenの日→英品質を採用判断に使う条件（2026-10-29）
+
+- [Qwenチームの発表](https://qwen.ai/blog?id=qwen3.8-livetranslate)と[Model Studioの仕様](https://docs.modelstudio.console.alibabacloud.com/ja/model-studio/qwen3-5-livetranslate-flash-realtime)では、日本語を入力音声として、英語を訳音声として扱える。原文字幕はQwen3.8で常時有効、用語は`session.translation.corpus.phrases`へ設定できる。したがって**日→英の実験候補として妥当**。
+- QwenチームはFLEURSの70言語方向を評価したと発表するが、公開本文に日→英単独の数値、会話5分の結果、NIHOの「発話開始→対応する英語音声開始」と同じ遅延指標は示されていない。[Tencent Hunyuanの比較](https://github.com/Tencent-Hunyuan/Hy-SimulMT)は中国語↔英語を対象としており、日→英の裏付けには使えない。**現行GPT-Liveより日本語で高精度・高速とは未証明**。
+- [Model Studio価格表](https://www.alibabacloud.com/help/en/model-studio/model-pricing)はシンガポールの`qwen3.8-livetranslate-flash-realtime`に新規利用者向け100万トークンを掲示する。[無料枠の条件](https://www.alibabacloud.com/help/en/model-studio/new-free-quota)は90日、シンガポール限定で、枠消費後は従量課金へ自動移行する。試す場合はコンソールで残枠を確認し、課金を避けたいなら**Free Quota Onlyを先に有効化**する。アカウント情報の登録は必要。現在のオーナーのアカウントで新規枠を受け取れるかは未確認。
+- APIキー・workspace IDの取得ができたら、最初は合成音声で接続契約を検証し、次に使用許諾が明確な公開の日→英音声を5分以上、複数本、反復で流す。`gpt-live-1`と同じ正解原稿で意味、数字・否定・地名、原文ASR、`L_start` p50/p95、8秒以内率、5分後半の遅延蓄積、費用を比較する。hotwordあり/なしは別試験。**私有の不動産対談をAlibabaへ送る許可は得ていない**。
+- このPRのQwenアダプターは製品経路に未接続。APIキーがないため実サービスとの疎通と日→英の性能は未測定。現在の製品既定は比較結果が揃うまで変えない。

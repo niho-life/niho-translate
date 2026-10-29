@@ -8,7 +8,7 @@
 import { WebSocket, type RawData } from "ws";
 import type { Engine, EngineConfig, EngineFactory, EngineSink } from "../engine.ts";
 import { EngineError, decodeBase64Pcm, isRecord, rawDataToString, resolveOptions, safeToken, transportErrorDetail } from "./index.ts";
-import { downsample24kTo16k } from "./gemini-live-translate.ts";
+import { Pcm24To16Resampler } from "./resample-24k-16k.ts";
 
 export const QWEN_MODEL = "qwen3.8-livetranslate-flash-realtime";
 const START_TIMEOUT_MS = 15_000;
@@ -112,6 +112,7 @@ class QwenLiveTranslateEngine implements Engine {
   private finishWaiter: (() => void) | undefined;
   private readonly inputDelta = new Map<string, string>();
   private responseCount = 0;
+  private readonly resampler = new Pcm24To16Resampler();
 
   constructor(private readonly config: EngineConfig, private readonly sink: EngineSink, private readonly apiKey: string, private readonly settings: QwenOptions) {}
 
@@ -144,7 +145,7 @@ class QwenLiveTranslateEngine implements Engine {
   appendPcm(pcm: Buffer): void {
     if (this.state !== "ready" || !this.socket) return;
     if (this.socket.bufferedAmount > MAX_BUFFERED_BYTES) { this.fail("QWEN_BACKPRESSURE"); return; }
-    this.send({ type: "input_audio_buffer.append", audio: downsample24kTo16k(pcm).toString("base64") });
+    this.send({ type: "input_audio_buffer.append", audio: this.resampler.process(pcm).toString("base64") });
   }
 
   async finish(): Promise<void> {

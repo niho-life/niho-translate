@@ -15,7 +15,7 @@
 - clientのepoch timestampをserver clockと比較しません。speech boundaryは推定表示にだけ使い、v1の配信をenergy/focusで遮断しません。10秒目標は実機で測定し、遅着音声の破棄で達成扱いにしません。
 - client/provider JSON size、field、enum、base64 canonical encoding、PCM alignmentを検証します。provider未知media、binary、過大JSON、backpressureはsession停止です。未知non-media controlだけをboundedに無視します。
 - provider transportの `bufferedAmount` は有限・非負の観測値を必須とし、192,000 bytes超過を停止します。未観測を0と扱わず、現在のCloudflare provider transportは実通訳に使えません。Nodeはnative ping/pongを5秒間隔・5秒期限で照合します。古い/別payloadのpongは期限を延長しません。接続確認のための `session.update` は翻訳を途切れさせるため廃止しました。APIの `elapsed_ms` は音声やinputの配送ACKではなく、無音中のliveness判定にも使いません。
-- OpenAI keyはrelayだけに置き、固定の `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate`、またはrelay設定 `TRANSLATE_PROVIDER=live` 時の固定 `wss://api.openai.com/v1/live/sessions` 以外へ接続せず、接続先をclient入力で選びません。
+- OpenAI keyはrelayだけに置き、既定（`TRANSLATE_PROVIDER` 未指定または `live`）の固定 `wss://api.openai.com/v1/live/sessions`、または `TRANSLATE_PROVIDER=translate` 時の固定 `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate` 以外へ接続せず、接続先をclient入力で選びません。
 - local mockだけが無資格で動作し、loopback以外へbindしません。標準tokenは `host-ja` と `guest-en` です。
 
 reference memory registryは単一process専用です。本番の複数process構成は同一 `roomId + roomEpoch` のsingle-writer routingを保証してください。

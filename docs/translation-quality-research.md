@@ -8,6 +8,8 @@
 
 ## 1. 結論と優先順位
 
+**決定（2026-10-29）: 主経路はOpenAI `gpt-live-1`（通訳指示 `plain-q`・声 `marin`）。** [比較評価](translation-quality-eval-2026-10-28.md)（§3・§8.5・§8.7・§8.9・§8.10）で、同じ原稿・2人の審判（gpt-5.4とClaude Opus 5.5）・全窓で現行 `gpt-realtime-translate` を上回った（意味 2.53〜2.70 vs 2.19〜2.29、重大誤り 1〜2/240 vs 19〜26/432）。60分連続運転と文脈圧縮の直後にも劣化は見えない。Gemini 3.5 Live Translate は訳の開始が速い（8秒以内 99%）が意味 2.00・重大誤りの率が約5倍で不採用（速さ優先の補助候補）。Node版relayの既定を `TRANSLATE_PROVIDER=live` にし、現行経路は `TRANSLATE_PROVIDER=translate` で残す。以下の1〜5は決定前の方針で、記録として残す。
+
 1. **現行のOpenAI `gpt-realtime-translate`を基準線にする。** 音声を連続送信して訳音声と訳字幕を受ける通訳専用セッションで、NIHO側にASR→翻訳→TTSの直列処理を追加しない。現時点で実機の意味対応遅延と品質は合格未証明。
 2. **先に入力音質、送信間隔、再生待ちを計測する。** 実際の5分試験では出力集中があり、モデル変更だけで受信者の待ち時間は決まらない。耳に届く時刻で評価する。
 3. **専門語・背景情報が効くかは別の単一音声セッションで比較する。** `gpt-realtime-translate`にはカスタムプロンプト・用語集がない。OpenAI `gpt-live-1`の通訳専用指示とDeepL Voice APIのSpoken Terms／glossaryを候補にする。どちらもこの用途の実測は未了。

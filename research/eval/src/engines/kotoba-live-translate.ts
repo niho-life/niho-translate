@@ -147,8 +147,8 @@ class KotobaLiveTranslateEngine implements Engine {
         break;
       case "audio": this.sink.outputAudio(event.pcm); break;
       case "text":
-        // Public docs disagree whether this delta is source or target. Keep it private and unclassified until observed.
-        this.sink.diag("kotoba.text_delta.text", { text: event.text, itemId: event.itemId ?? "unknown" });
+        // fal realtime_voice の実接続では、入力転記というイベント名でも内容は英訳だった。
+        this.sink.outputTranscript(event.text, event.itemId ? { itemId: event.itemId } : undefined);
         break;
       case "finished":
         if (this.state !== "finishing") { this.fail("KOTOBA_COMMITTED_EARLY"); break; }

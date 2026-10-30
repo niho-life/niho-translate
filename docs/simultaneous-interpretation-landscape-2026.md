@@ -323,6 +323,8 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 
 Kotoba直営APIは[選定顧客向けの非公開アルファ](https://docs.kotoba.tech/overview/introduction)。一方、[fal上のKotoba STS](https://fal.ai/models/kotoba-technologies/kotoba-sts/v1/realtime_voice/api)は日→英を安定対応として示し、24 kHz mono PCM16のWebSocketと訳音声・字幕を公開している。2026-10-31の表示価格は**セッション1分**$0.035（秒単位課金）。falの音声ファイル用画面は最大5分だが、ファイルの完成後だけを見る評価では訳音声開始時刻が測れないため、採用判断は**実時間送信するWebSocket run**を使う。falは起動待ちが数分になる場合を案内しており、接続準備時間と発話開始後の遅延を分ける。API keyはサーバー側にのみ置く。
 
+falの公開音声10秒実接続では訳音声を受信した。`conversation.item.input_audio_transcription.text.delta` は名称に反して**英語訳文**を返した。直営SDKの原文転記の説明をfal経路へ当てはめず、この経路では日本語原文字幕を取得済みと扱わない。5分の意味・遅延比較は同じ公開音声で別途測る。
+
 [Kotobaの公開評価コード](https://github.com/kotoba-tech/kotoba-benchmark)は音声を再転記し、区間整列後に正確さ・流暢さ・簡潔さを別々に採点する。ただし[その遅延定義](https://github.com/kotoba-tech/kotoba-benchmark/blob/main/docs/metrics.md)にある「commit送信→最初の訳音声」と、NIHOの「原語の意味区間開始→対応する訳音声の**再生**開始」は異なる。前者や販促上の字幕遅延を8秒基準の代用にしない。また同評価コードの品質採点は質問を断定に変える誤りを独立に数えないので、NIHOの`answered_question`と重要事実の判定を残す。
 
-試す順は、(1)公開・合成音声で接続とデータ形式を確認、(2)同じ5分WAVを現行GPT-LiveとKotoba既定で1回ずつ、(3)質問・否定・金額の失敗が減る場合だけ`delay`を品質優先側へ動かして再試験、(4)独立録音と人手聴取で再現、の順。**平均点だけで候補を採らず、質問の断定化・事実の反転/創作・未訳を分母に残す。**この比較前に製品の既定エンジンをKotobaへ切り替えない。falの購入クレジットは[規約](https://fal.ai/legal/terms-of-service)上、原則返金不可で購入365日後に失効するため、研究費と運用費を混同しない。
+同じ公開のネイティブ日本語5分WAVで実時間試験した結果は[区間別品質レポート](native-japanese-speech-translation-probe-2026-10-31.md)。Kotoba既定はGPT-Liveより`L_start`が短かったが、意味点は1.90/3対2.44/3と低かった。`delay=10`はKotoba内で2.17/3へ改善、`delay=20`は2.06/3へ下がり、先読みを最大にすれば品質が単調に上がるとは言えなかった。独立した公開自然対談5分でもGPT-Liveが意味2.46/3に対しKotoba `delay=10`は1.92/3、`delay=20`は1.83/3で、Kotobaの95百分位遅延は9.81秒・8.58秒だった。質問の断定化、重要事実、欠落を残したまま評価した。**平均点だけで候補を採らず、質問の断定化・事実の反転/創作・未訳を分母に残す。**この結果から製品の既定エンジンはKotobaへ切り替えない。falの購入クレジットは[規約](https://fal.ai/legal/terms-of-service)上、原則返金不可で購入365日後に失効するため、研究費と運用費を混同しない。

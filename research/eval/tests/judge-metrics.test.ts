@@ -84,6 +84,15 @@ describe("resolveSegment", () => {
     { type: "negation", text: "しません" },
   ]);
 
+  it("caps a question rendered as an asserted answer despite a high judge score", () => {
+    const question = ref("q1", "question", 0, 4_000);
+    const asserted = resolveSegment(question, raw("q1", { meaning: 3, flags: ["answered_question"] }), words);
+    expect(asserted.meaning).toBe(1);
+    expect(asserted.flags).toContain("answered_question");
+    expect(resolveSegment(question, raw("q1"), words).meaning).toBe(3);
+    expect(resolveSegment(seg, raw("s1", { flags: ["answered_question"] }), words).meaning).toBe(3);
+  });
+
   it("maps word indices to ms and computes lStart / lEnd / lTail", () => {
     const out = resolveSegment(
       seg,

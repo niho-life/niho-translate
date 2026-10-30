@@ -6,7 +6,7 @@ import type { FactVerdict, JudgeFlag, ReferenceSegment } from "../engine.ts";
 import { FACT_VERDICTS, JUDGE_FLAGS } from "./metrics.ts";
 import type { BatchPlan, EnSentence, OutputWord, RawSegmentJudgement } from "./types.ts";
 
-export const DEFAULT_PROMPT_VERSION = "v2";
+export const DEFAULT_PROMPT_VERSION = "v3";
 export const CONTEXT_SEGMENTS = 3;
 /** 対象区間の開始より前に見せる英語（正解原稿の時刻誤差ぶん）。 */
 export const WINDOW_BEFORE_MS = 2_000;
@@ -69,7 +69,16 @@ const JUDGE_INSTRUCTIONS_V2 = JUDGE_INSTRUCTIONS_V1
   .replace("different value, polarity, subject, condition, time, place or name", "different value, polarity, subject, condition, time, place, legal right or name")
   .replace('鎌倉 → "Kyoto"). A place fact', '鎌倉 → "Kyoto"; 所有権 → "for sale"). A place fact')
   .replace("(逗子 = Zushi).", "(逗子 = Zushi). Freehold ownership and leasehold are distinct legal rights.");
-const PROMPTS: Readonly<Record<string, string>> = { v1: JUDGE_INSTRUCTIONS_V1, v2: JUDGE_INSTRUCTIONS_V2 };
+const JUDGE_INSTRUCTIONS_V3 = `${JUDGE_INSTRUCTIONS_V2}
+
+QUESTION SPEECH ACT (apply to every JUDGE segment with kind=question)
+- Check what the speaker is asking and whether the aligned English asks the listener the same thing. This check is separate from whether names and other listed facts are correct.
+- If the English asserts an answer or conclusion instead of asking, set answered_question, cap meaning at 1, and explain the change in the Japanese note. This includes a declarative paraphrase with correct topic and facts: 「参加者は少ない？」 → "There are very few participants." is NOT a faithful question.
+- An English tag question that actually asks for confirmation can preserve the speech act: "There are very few participants, aren't there?" Do not decide by punctuation alone; ASR punctuation can be wrong. Read the wording and surrounding exchange.
+- Preserve the scope and degree of the question. 「ものすごく少ない？」 asks whether there are very few; "Are there even any?" asks whether any exist at all. They are not interchangeable. A changed degree or presupposition caps meaning at 1 even when the English remains a question.
+- A question with no aligned translation is meaning 0 and omission. Do not credit a nearby answer by the other speaker as the question's translation.
+`;
+const PROMPTS: Readonly<Record<string, string>> = { v1: JUDGE_INSTRUCTIONS_V1, v2: JUDGE_INSTRUCTIONS_V2, v3: JUDGE_INSTRUCTIONS_V3 };
 
 export function judgeInstructions(version: string): string {
   const text = PROMPTS[version];

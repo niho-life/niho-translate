@@ -7,7 +7,7 @@
 export type Language = "ja" | "en";
 
 export interface EngineConfig {
-  /** "openai-translate" | "openai-live" | "openai-realtime" | "cascade" | "gemini-live-translate" | "qwen-live-translate" */
+  /** "openai-translate" | "openai-live" | "openai-realtime" | "cascade" | "gemini-live-translate" | "qwen-live-translate" | "kotoba-live-translate" */
   readonly engineId: string;
   readonly sourceLanguage: Language;
   readonly targetLanguage: Language;
@@ -23,6 +23,8 @@ export interface EngineSecrets {
   readonly googleAccessToken?: string;
   /** Alibaba Cloud Model Studio。qwen-live-translate のみ使用。 */
   readonly qwenApiKey?: string;
+  /** fal.ai。kotoba-live-translate のみ使用。 */
+  readonly falApiKey?: string;
 }
 
 export interface TranscriptMeta {

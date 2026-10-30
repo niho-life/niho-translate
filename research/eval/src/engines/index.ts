@@ -19,7 +19,7 @@ export class EngineError extends Error {
   }
 }
 
-export const ENGINE_IDS = ["openai-translate", "openai-live", "openai-realtime", "cascade", "gemini-live-translate", "qwen-live-translate"] as const;
+export const ENGINE_IDS = ["openai-translate", "openai-live", "openai-realtime", "cascade", "gemini-live-translate", "qwen-live-translate", "kotoba-live-translate"] as const;
 export type EngineId = (typeof ENGINE_IDS)[number];
 
 // 文字列リテラルにしないことで、cascade が未作成でも typecheck が通る。
@@ -35,6 +35,7 @@ function importEngineModule(engineId: EngineId): Promise<unknown> {
     case "openai-live": return import("./openai-live.ts");
     case "gemini-live-translate": return import("./gemini-live-translate.ts");
     case "qwen-live-translate": return import("./qwen-live-translate.ts");
+    case "kotoba-live-translate": return import("./kotoba-live-translate.ts");
     case "openai-realtime": return import("./openai-realtime.ts");
     case "cascade": return import(CASCADE_MODULE) as Promise<unknown>;
   }

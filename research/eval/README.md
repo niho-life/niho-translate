@@ -58,6 +58,7 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 | `cascade` | `gpt-live-transcribe`（streaming ASR）→ 日本語の節単位の区切り → LLM 訳（直前文脈つき）→ streaming TTS。agent B の設計書 `src/engines/cascade/README.md` を正とする | B が定義（`asrDelay`, `segmenter`, `llm`, `tts`, `context`, `glossary` など） |
 | `gemini-live-translate` | Vertex AI の Live API `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`（`global`）。`setup` に `model: projects/<project>/locations/global/publishers/google/models/gemini-3.5-live-translate-preview`、`generationConfig.translationConfig.targetLanguageCode`、`inputAudioTranscription` / `outputAudioTranscription`（setup 直下）。音声は 16 kHz に間引いて `realtimeInput.audio`、終端は `realtimeInput.audioStreamEnd`。`serverContent.modelTurn.parts[].inlineData`（24 kHz）と `outputTranscription` / `inputTranscription` を受ける。通訳専用モデルで instructions・voice は無い。認証は `GOOGLE_ACCESS_TOKEN`（`gcloud auth print-access-token`） | `project`（既定 `GOOGLE_CLOUD_PROJECT`）、`location`（global）、`echo=true|false`（false） |
 | `qwen-live-translate` | Alibaba Cloud Model Studio の `qwen3.8-livetranslate-flash-realtime`。シンガポール/北京のworkspace別WebSocketへ16 kHz PCMを継続送信し、24 kHz PCM訳音声・原文/訳文deltaを受ける。終端は `session.finish`→`session.finished`。公式仕様のhotword辞書と話者検出/音声活動検出を比較できる。入力言語はモデルの自動判定。製品経路には未接続 | `region=singapore|beijing`（singapore）、`hotwords=off|env`（off）、`turnDetection=speaker|server-vad`（speaker）。`DASHSCOPE_API_KEY`、`QWEN_WORKSPACE_ID`を環境に設定。`hotwords=env`なら`QWEN_HOTWORDS_JSON`に `{ "鎌倉": "Kamakura" }` 形式を設定。用語本文・workspace IDはCLI引数やstdoutへ渡さない |
+| `kotoba-live-translate` | fal.ai 上の Kotoba STS。日本語→英語の単一WebSocketへ24 kHz PCMを実時間送信し、24 kHz訳音声を受ける研究用アダプター。`voice_session.update` と `input_audio_buffer.append/commit` を[公式SDK](https://github.com/kotoba-tech/kotoba-python/blob/main/src/kotoba/_ws_s2st.py)に合わせる。製品経路には未接続 | `delay=0..20`（省略時はサーバー既定）。大きいほど先読みを増やし品質優先。`FAL_KEY`を環境に設定し、公開・合成音声だけを送る。原文か訳文か[公開資料間で矛盾](https://docs.kotoba.tech/s2st/python-sdk)する `text.delta` は私有診断イベントへ保存し、確認できるまで品質判定に使わない。費用はセッション継続時間×$0.035/分の概算 |
 
 Qwenのモデル・イベント形式は[公式ガイド](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen3-5-livetranslate-flash-realtime)と[client event](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/live-translator-client-events)に合わせた。公開リポジトリには合成fixtureだけを置く。私有の会話音声をAlibabaへ送る承認は得ていないため、実行する場合もまず公開・合成音声に限定する。`QWEN_HOTWORDS_JSON`の値は記録しないが、件数はprivate eventsに記録する。原文の最終転記が途中deltaを修正した場合はprivate `events.jsonl`の`qwen.input_revision.text`へ記録する。Qwen入力の24→16 kHz変換にはframe間で状態を保持する7 kHz低域フィルタを使い、折り返しを抑える。既存Gemini比較の変換方式は測定値の再現性のため変更していない。
 
@@ -118,6 +119,8 @@ export GOOGLE_CLOUD_PROJECT=niho-app-stg
 npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-translate --frame-ms 200
 # GPT-Live の背景注入 A/B。背景本文は private に保管し、CLI 引数や公開リポへ書かない
 npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-live --frame-ms 200 --option preset=plain-q --option contextFile="$EVAL_PRIVATE_DIR/work/topic-context.txt"
+# Kotobaの研究用比較。秘密ファイルはGit管理外に置き、値をstdout・CLI引数へ出さない
+FAL_KEY="$(cat /absolute/private/credentials/fal-kotoba-research.key)" npm --silent run eval:run -- --wav /absolute/private/probe-5m.wav --window 0:300 --source-id covost-native-ja-5m-a --engine kotoba-live-translate --frame-ms 200 --tail-silence-sec 20 --finish-timeout-sec 90
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json"
 # 既定の判定器は Claude（ANTHROPIC_API_KEY）。gpt-5.4 で判定するなら --judge-backend openai。--skip-asr で既存の output-words.json を再利用する
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json" --judge-backend openai --skip-asr --out-name judgement-gpt54.json
@@ -140,7 +143,7 @@ npm --silent run eval:aggregate -- --runs "$EVAL_PRIVATE_DIR"/runs/*
 
 ## 8. 共通の禁止事項
 
-- 鍵を引数・ファイル・ログ・エラーメッセージに出さない。`OPENAI_API_KEY`・`ANTHROPIC_API_KEY`・`GOOGLE_ACCESS_TOKEN` は環境変数からだけ読む。
+- 鍵をCLI引数・Git管理下のファイル・ログ・エラーメッセージに出さない。研究用の鍵はオーナーが承認したGit管理外の秘密ファイル（本人のみ読み取り可能）に保管し、`FAL_KEY`などの環境変数からプロセス内で読む。
 - 原文・訳文・音声・実データの path を `research/**`、tests、CI、stdout に出さない（stdout は集計 JSON のみ）。
 - `packages/**`、`ios/**`、`examples/**`、`scripts/**` を変更しない（製品経路の比較対象を固定するため）。
 - 他担当の path を編集しない。`engine.ts`・`prompts/**`・本 README の変更が必要なら、変更内容をメイン担当へ報告して止まる。

@@ -19,6 +19,7 @@ describe("interpreter prompt factors", () => {
     const background = buildInterpreterInstructions("plain-q", "ja", "en", "A synthetic property discussion.");
     const timing = buildInterpreterInstructions("early-safe-q", "ja", "en");
     const attribution = buildInterpreterInstructions("attribution-q", "ja", "en");
+    const questionSafe = buildInterpreterInstructions("question-safe-q", "ja", "en");
     expect(baseline).not.toContain("Glossary (");
     expect(baseline).not.toContain("Background to disambiguate");
     expect(glossary).toContain("Glossary (");
@@ -30,5 +31,6 @@ describe("interpreter prompt factors", () => {
     expect(timing).not.toContain("Glossary (");
     expect(timing).not.toContain("Background to disambiguate");
     expect(attribution).toBe(`${baseline}\nWhen the speaker reports another person's words, feelings, plans or actions, attribute them to that person. Do not turn a reported person's view into the speaker's own view.`);
+    expect(questionSafe).toBe(`${baseline}\nWhen a Japanese clause could still become either a question or a statement, wait until its final wording or intonation makes that clear before speaking the corresponding English clause. Preserve a question as a question, even if waiting delays its first English word. Never assert a likely answer.`);
   });
 });

@@ -1,8 +1,8 @@
 import { glossaryLines } from "./glossary.ts";
 import type { Language } from "../engine.ts";
 
-export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "glossary-q" | "domain-glossary-q" | "compact-q" | "early-safe-q" | "brisk-q" | "official-short" | "attribution-q";
-export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "glossary-q", "domain-glossary-q", "compact-q", "early-safe-q", "brisk-q", "official-short", "attribution-q"];
+export type InterpreterPreset = "plain" | "domain" | "domain-glossary" | "plain-q" | "glossary-q" | "domain-glossary-q" | "compact-q" | "early-safe-q" | "question-safe-q" | "brisk-q" | "official-short" | "attribution-q";
+export const INTERPRETER_PRESETS: ReadonlyArray<InterpreterPreset> = ["plain", "domain", "domain-glossary", "plain-q", "glossary-q", "domain-glossary-q", "compact-q", "early-safe-q", "question-safe-q", "brisk-q", "official-short", "attribution-q"];
 
 const LANGUAGE_NAME: Record<Language, string> = { ja: "Japanese", en: "English" };
 
@@ -62,6 +62,10 @@ export function buildInterpreterInstructions(preset: InterpreterPreset, source: 
   ].join("\n");
   if (preset === "early-safe-q") return [...base, ...twoParty,
     `Begin a translation from a stable subject or topic when it can be said without predicting the unseen predicate. Hold back claims whose verb, polarity, number or condition is not yet audible. Do not speak generic filler merely to start early.`,
+    ...contextLines,
+  ].join("\n");
+  if (preset === "question-safe-q") return [...base, ...twoParty,
+    `When a Japanese clause could still become either a question or a statement, wait until its final wording or intonation makes that clear before speaking the corresponding English clause. Preserve a question as a question, even if waiting delays its first English word. Never assert a likely answer.`,
     ...contextLines,
   ].join("\n");
   if (preset === "brisk-q") return [...base, ...twoParty,

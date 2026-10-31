@@ -67,6 +67,8 @@ DeepLのsession設定では、`source_language=ja`、`source_language_mode=fixed
 
 製品切替の最低条件は、複数の自然会話5分で確認済み重大事実誤りをなくし、音声基準の`L_start` P95を8秒以内へ近づけ、8秒以内率を上げ、長い連続発話でも再生待ちが増え続けないこと。現時点ではどの候補もオーナーの最大8秒・高精度の受入基準を満たしていない。これを満たすまで研究候補を製品既定へ接続しない。
 
+OpenAIの[前払い請求案内](https://help.openai.com/en/articles/8264644-what-is-prepaid-billi)ではAPIクレジットの最低購入額は5ドル。前回の話者別5分GPT-Liveは1run約0.30ドルだったため、背景・用語の少数回の再試験なら5ドルの手動補充から始められる見込み。ただし実請求額はrunごとに変わり、前払い残高は厳密な即時停止上限ではない。自動補充は不要。DeepLのAWS Marketplace掲載は年間契約なので、まず短期試用または直販の月額条件を確認する。
+
 ## オーナーがDeepLへ確認する際の文面
 
 [DeepLの営業窓口](https://www.deepl.com/en/contact-us)では「DeepL API」を対象製品に選べる。以下を問い合わせ欄に貼り付ける。

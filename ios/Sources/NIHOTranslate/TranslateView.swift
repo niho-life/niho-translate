@@ -69,6 +69,15 @@ public struct TranslateView: View {
                                 .font(.subheadline)
                             Text(text("音声をOpenAIに送信して翻訳します。NIHOに録音や会話履歴を保存しません。", "Audio is sent to OpenAI for interpretation. NIHO does not save recordings or conversation history."))
                                 .font(.footnote).foregroundColor(.secondary)
+                            Label(
+                                text(
+                                    "AI通訳は誤訳することがあります。金額・日時・契約条件など重要な内容は相手と再確認してください。",
+                                    "AI interpretation can make mistakes. Confirm important details such as amounts, dates, and contract terms with the other person."
+                                ),
+                                systemImage: "exclamationmark.triangle"
+                            )
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
                             Toggle(text("同意して通訳を使う", "I agree to use interpretation"), isOn: $consent)
                                 .onChange(of: consent) { session.setExplicitConsent($0) }
                             Button(text("イヤフォンを確認して接続", "Check earphones & connect")) {

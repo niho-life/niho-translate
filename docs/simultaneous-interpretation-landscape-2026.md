@@ -1,5 +1,7 @@
 # 日英同時通訳の設計に関する研究・製品の調査（2026-10）
 
+**2026-10-31 方針更新:** DeepLの記述は10/28時点の候補調査として残す。オーナーの決定により、今後の比較・契約・実装は進めない。GPT-Liveの背景・用語・訳出タイミングの実測は[8条件5分評価](qwen-and-gpt-live-quality-experiments-2026-10-31.md)を参照。
+
 調査日: 2026-10-28。対象: v1 の日英 2 人対面通訳（ホスト 1＋ゲスト 1、iPhone とイヤフォン、話者別ストリーム、聞き手だけに訳音声）。追跡 Issue: [#21](https://github.com/niho-life/niho-translate/issues/21)。前提の調査は [translation-quality-research.md](translation-quality-research.md)、同日の比較結果は [translation-quality-eval-2026-10-28.md](translation-quality-eval-2026-10-28.md)。
 
 **2026-10-29 更新:** §7 に追加の一次資料と、現行実装へ反映する順序を記載した。§4 の「A」は10/28時点の旧基準線で、現在のNode relayの既定は `gpt-live-1` の `plain-q`。連続5分の音声時刻による評価は [public-audio-software-evaluation-2026-10-29.md](public-audio-software-evaluation-2026-10-29.md) を正とする。

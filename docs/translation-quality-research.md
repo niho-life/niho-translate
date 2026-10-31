@@ -1,5 +1,7 @@
 # 同時通訳の品質・遅延改善：調査と実装者向け実験仕様
 
+**2026-10-31 方針更新:** DeepLは利用・契約・実装の対象外。本文中のDeepL比較案は過去の調査記録であり、次の担当者は実行しない。補充されたGPT-Live利用枠による背景・用語・話者・訳出タイミングの8条件5分評価は[最新の品質実験](qwen-and-gpt-live-quality-experiments-2026-10-31.md)を参照。
+
 調査日：2026-10-28。対象：v1の日英2人対面通訳、iPhoneとprivate headset。追跡Issue：[2026年の同時通訳品質・遅延改善 #21](https://github.com/niho-life/niho-translate/issues/21)。
 
 **2026-10-28 追記:** この文書の測定設計に沿って A（現行）/ B（`gpt-live-1`）/ B2（realtime VAD）/ D'（cascade 試作）を同条件で比較した結果は [translation-quality-eval-2026-10-28.md](translation-quality-eval-2026-10-28.md)、ハーネスは [research/eval](../research/eval/README.md)。

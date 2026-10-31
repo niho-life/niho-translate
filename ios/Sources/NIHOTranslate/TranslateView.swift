@@ -106,6 +106,21 @@ public struct TranslateView: View {
                         }
                         Label(text("あなたには日本語で聞こえます", "You hear the English translation"), systemImage: "headphones")
                             .font(.subheadline.bold())
+                        if session.translatedSpeechWasOmitted {
+                            Label(
+                                text(
+                                    "通訳音声の一部が届きませんでした。重要な内容は相手にもう一度確認してください。",
+                                    "Part of the interpretation audio was lost. Confirm important details with the other person."
+                                ),
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.subheadline)
+                            .foregroundColor(.orange)
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .cornerRadius(12)
+                        }
                         if session.captions.isEmpty {
                             Text(text("相手が話すと、ここに翻訳が表示されます。", "The translation appears here when the other person speaks."))
                                 .foregroundColor(.secondary).padding(.vertical, 28)

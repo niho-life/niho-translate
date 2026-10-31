@@ -57,12 +57,13 @@ protocol v1は全server eventに接続単位で単調増加する `deliveryId` �
 - [日英同時通訳 比較評価 2026-10-28（現行 / gpt-live-1 / realtime VAD / cascade）](docs/translation-quality-eval-2026-10-28.md)・[比較評価ハーネス](research/eval/README.md)
 - [日英同時通訳の設計に関する研究・製品の調査（2026-10）](docs/simultaneous-interpretation-landscape-2026.md)
 - [ネイティブ日本語5分の音声通訳ストレス試験（2026-10-31）](docs/native-japanese-speech-translation-probe-2026-10-31.md)
+- [話者別5分・Qwen/GPT-Live品質と限定修復の実験（2026-10-31）](docs/qwen-and-gpt-live-quality-experiments-2026-10-31.md)
 
 実通訳のtransportは送信バッファを観測できるNode版relayを使います。現在のCloudflare例は未観測のためprovider設定前に安全停止します。翻訳中の設定更新をheartbeatに使わず、Nodeのnative ping/pongで生存を確認します。詳しくは [Node版の運用条件](examples/relay-local/README.md) を参照してください。
 
 ## 未完了の受入
 
-provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信しました。合成音声の時刻・金額・否定は初回両方向で一致し、繰り返しの1回では金額の自動判定が不一致でした。意味精度の人による確認、実iPhone・ホスト認可/予算を含むroom全体、Node版relayを使うホスト側の配備・接続先更新と実回線watchdog、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。2026-10-29の比較評価（[評価文書](docs/translation-quality-eval-2026-10-28.md)）で主経路をGPT-Live（`gpt-live-1`・通訳指示`plain-q`・声`marin`）に確定し、Node版relayの既定を`TRANSLATE_PROVIDER=live`にしました。現行の`gpt-realtime-translate`は`TRANSLATE_PROVIDER=translate`で選べます。GPT-Live adapter（`packages/provider-openai-live`）自体はfake transportの自動テストと合成音声1回の実API smoke（訳音声・訳字幕・原文字幕の受信と`session.closed`までのdrain）までで、同じAPI・同じ指示文の研究ハーネスでは60分連続運転と主要5窓の品質判定を済ませましたが、adapterの実iPhone・room全体・60分連続運転は未確認です。
+provider単体では実OpenAI APIから日英両方向の訳音声・字幕を受信しました。合成音声の時刻・金額・否定は初回両方向で一致し、繰り返しの1回では金額の自動判定が不一致でした。意味精度の人による確認、実iPhone・ホスト認可/予算を含むroom全体、Node版relayを使うホスト側の配備・接続先更新と実回線watchdog、iPhone実機10秒受入は未完了です。自動テストはfake transport、protocol、room/relay lifecycle、Swift coreとiOS 15.5 compileを対象にし、実API・実機成功の代用にはしません。2026-10-29の比較評価（[評価文書](docs/translation-quality-eval-2026-10-28.md)）で主経路をGPT-Live（`gpt-live-1`・通訳指示`plain-q`・声`marin`）に確定し、Node版relayの既定を`TRANSLATE_PROVIDER=live`にしました。現行の`gpt-realtime-translate`は`TRANSLATE_PROVIDER=translate`で選べます。GPT-Live adapter（`packages/provider-openai-live`）で公開音声の話者別5分実時間送信、全入力受理、訳音声・日英字幕受信、正常排出を確認しました。ただし訳字幕と独立した訳音声ASRの両方に重大な時制・主体の誤りがあり、品質合格とはしません。同じAPI・同じ指示文の研究ハーネスでは60分連続運転と主要5窓の品質判定を済ませましたが、adapterの実iPhone・room全体・60分連続運転は未確認です。
 
 ## 権利
 

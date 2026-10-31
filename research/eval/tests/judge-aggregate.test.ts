@@ -157,6 +157,10 @@ describe("buildRows", () => {
     const table = renderTable(rows);
     const lines = table.split("\n");
     expect(lines[0]).toMatch(/^\| engine \| options \| judged\/runs/);
+    const columns = (line: string): number => line.split("|").slice(1, -1).length;
+    expect(columns(lines[0]!)).toBe(19);
+    expect(columns(lines[1]!)).toBe(columns(lines[0]!));
+    expect(columns(lines[3]!)).toBe(columns(lines[0]!));
     expect(lines[3]).toBe(
       "| openai-translate | frame=200 | 2/2 | 2 | 5 | 4.0 | 9.0 | 9.0 | 60% | 2.00 | 2 | number=1 place=1 | 1 | 1 | 0 | 3000 | 2500 | 3 | ≥0.100 |",
     );

@@ -119,7 +119,7 @@ export function factErrorsLabel(byType: Readonly<Partial<Record<FactType, number
 export function renderTable(rows: ReadonlyArray<TableRow>): string {
   const lines = [
     "| engine | options | judged/runs | sources | n | lStart p50 (s) | lStart p95 (s) | lStart max (s) | within8s | meaning | criticalFactErrors | factErrorsByType | omission | hallucination | answeredQuestion | firstAudioOutMs | queue.maxMs | over2000Count | costUsd |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|",
   ];
   for (const r of rows) {
     const cost = r.costUsd === null ? dash : `${r.costPartial ? "≥" : ""}${r.costUsd.toFixed(3)}`;

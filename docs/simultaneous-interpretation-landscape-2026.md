@@ -316,3 +316,15 @@ Seamless の長文 LAAL は Hibiki 論文で 4.2 秒、Hibiki-Zero 論文で 6.2
 4. DeepL Voiceの認識用用語と訳語glossary、ElevenLabsの慎重な出力設定は利用資格がないため実測できていない。公開仕様から日→英の優劣を断定しない。端末マイク・Bluetooth・イヤフォンの耳到達時刻は別の実機ゲートである。
 
 採用順は品質を先に置く。まず人手で正しい原文と意味上の重大誤りを確定し、その上で独立録音・複数runの音声遅延を比較する。モデルの切り替えや新しい分割アルゴリズムは、その比較で既定を上回った場合に限る。
+
+### 7.5 Kotobaの日英直接音声通訳と評価上の注意（2026-10-31）
+
+[Kotobaの公式API仕様](https://docs.kotoba.tech/overview/capabilities/speech-to-speech)は、日本語→英語を含む1接続の音声入力・訳音声出力と逐次原文転記を明記する。[公式SDK](https://docs.kotoba.tech/s2st/python-sdk)では、訳音声を出す前に保持する文脈を`delay=0..20`トークンで調整できる。大きい値は先読みを増やして品質を優先し、小さい値は遅延を優先する設計で、NIHOが試した単純な指示文追加よりも直接的な比較因子になる。ただし**日→英での品質・5分継続・NIHOの`L_start`/`L_fact`に対応する公開実測は確認できない**。
+
+Kotoba直営APIは[選定顧客向けの非公開アルファ](https://docs.kotoba.tech/overview/introduction)。一方、[fal上のKotoba STS](https://fal.ai/models/kotoba-technologies/kotoba-sts/v1/realtime_voice/api)は日→英を安定対応として示し、24 kHz mono PCM16のWebSocketと訳音声・字幕を公開している。2026-10-31の表示価格は**セッション1分**$0.035（秒単位課金）。falの音声ファイル用画面は最大5分だが、ファイルの完成後だけを見る評価では訳音声開始時刻が測れないため、採用判断は**実時間送信するWebSocket run**を使う。falは起動待ちが数分になる場合を案内しており、接続準備時間と発話開始後の遅延を分ける。API keyはサーバー側にのみ置く。
+
+falの公開音声10秒実接続では訳音声を受信した。`conversation.item.input_audio_transcription.text.delta` は名称に反して**英語訳文**を返した。直営SDKの原文転記の説明をfal経路へ当てはめず、この経路では日本語原文字幕を取得済みと扱わない。5分の意味・遅延比較は同じ公開音声で別途測る。
+
+[Kotobaの公開評価コード](https://github.com/kotoba-tech/kotoba-benchmark)は音声を再転記し、区間整列後に正確さ・流暢さ・簡潔さを別々に採点する。ただし[その遅延定義](https://github.com/kotoba-tech/kotoba-benchmark/blob/main/docs/metrics.md)にある「commit送信→最初の訳音声」と、NIHOの「原語の意味区間開始→対応する訳音声の**再生**開始」は異なる。前者や販促上の字幕遅延を8秒基準の代用にしない。また同評価コードの品質採点は質問を断定に変える誤りを独立に数えないので、NIHOの`answered_question`と重要事実の判定を残す。
+
+同じ公開のネイティブ日本語5分WAVで実時間試験した結果は[区間別品質レポート](native-japanese-speech-translation-probe-2026-10-31.md)。Kotoba既定はGPT-Liveより`L_start`が短かったが、意味点は1.90/3対2.44/3と低かった。`delay=10`はKotoba内で2.17/3へ改善、`delay=20`は2.06/3へ下がり、先読みを最大にすれば品質が単調に上がるとは言えなかった。独立した公開自然対談5分でもGPT-Liveが意味2.46/3に対しKotoba `delay=10`は1.92/3、`delay=20`は1.83/3で、Kotobaの95百分位遅延は9.81秒・8.58秒だった。質問の断定化、重要事実、欠落を残したまま評価した。**平均点だけで候補を採らず、質問の断定化・事実の反転/創作・未訳を分母に残す。**この結果から製品の既定エンジンはKotobaへ切り替えない。falの購入クレジットは[規約](https://fal.ai/legal/terms-of-service)上、原則返金不可で購入365日後に失効するため、研究費と運用費を混同しない。

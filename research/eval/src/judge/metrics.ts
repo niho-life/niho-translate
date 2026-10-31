@@ -106,7 +106,10 @@ export function resolveSegment(
   const enStartMs = first.startMs;
   const enEndMs = Math.max(last.endMs, enStartMs);
   const verdictOf = (index: number): FactVerdict => raw?.facts.find((f) => f.index === index)?.verdict ?? "unclear";
-  const meaning = Math.min(3, Math.max(0, Math.round(raw?.meaning ?? 0))) as 0 | 1 | 2 | 3;
+  const reportedMeaning = Math.min(3, Math.max(0, Math.round(raw?.meaning ?? 0)));
+  // An asserted answer cannot be a faithful rendering of the source question,
+  // even when the judge also marked its topic and listed facts as correct.
+  const meaning = Math.min(reportedMeaning, ref.kind === "question" && flags.includes("answered_question") ? 1 : 3) as 0 | 1 | 2 | 3;
   return {
     ...base,
     aligned: true,

@@ -8,6 +8,8 @@
 
 **2026-10-29 追加調査:** 世界の製品・研究・公開実装から採れる制御とNIHOの実装順は [simultaneous-interpretation-landscape-2026.md §7](simultaneous-interpretation-landscape-2026.md#7-追加調査既製品公開実装から採る設計2026-10-29) に整理した。
 
+**2026-10-31 独立話者試験:** 京都大学CoVoST 2 Native Japaneseの短文89件を5分へ連結した音声で、GPT-Liveの訳音声まで測った結果は[ネイティブ日本語5分の試験](native-japanese-speech-translation-probe-2026-10-31.md)。速度が目標内でも重大な意味誤りが残るため、品質を先に判定する。
+
 **2026-10-29 PC追試:** 背景・用語・訳出タイミングを単独で変えた5分比較と、重要事実が訳**音声**へ出るまでの`L_fact`計測は [pc-quality-factor-evaluation-2026-10-29.md](pc-quality-factor-evaluation-2026-10-29.md)。いずれも製品既定へ昇格できる再現性はまだ示していない。
 
 この文書は、次の実装担当が**何を先に試し、どの結果で採否を決めるか**を記す。公開資料にある機能、NIHOの現行コード、実測済みの範囲、未検証の仮説を分ける。製品としての性能保証や、他社製品の内部実装の断定ではない。

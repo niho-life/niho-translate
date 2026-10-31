@@ -4,7 +4,7 @@
 
 目的: 同じ日本語音声を実時間で複数の通訳エンジンへ流し、**意味対応する英語音声の開始遅延**と**意味精度**を同じ正解原稿・同じ判定器で比較する。オーナー基準は「発話開始→対応する英語音声の開始が概ね5秒、最大8秒」「日本語の文意が伝わる英語」。
 
-合成音声での金額・権利・後置否定の追試結果は[PC評価](../../docs/pc-golden-fact-evaluation-2026-10-30.md)。権利を重大事実へ追加した判定指示は`v2`で、旧`v1`のrunと同一基準として集計しない。
+合成音声での金額・権利・後置否定の追試結果は[PC評価](../../docs/pc-golden-fact-evaluation-2026-10-30.md)。権利を重大事実へ追加した判定指示は`v2`、質問の断定化を明示的に採点する判定指示は`v3`。旧版のrunと同一基準として平均点を集計しない。同じエンジン設定で判定指示版が異なるrunを`eval:aggregate`へ同時に渡すと、誤った合算を避けるため失敗する。[質問の再監査](../../docs/question-speech-act-audit-2026-10-31.md)を参照。
 
 このディレクトリは公開リポジトリの一部である。**音声・原文・訳文・実データのpath・APIキーをここに置かない。** 実データと実行結果は `EVAL_PRIVATE_DIR`（Git管理外の私有フォルダ）にだけ書く。
 
@@ -31,6 +31,8 @@
 - 出力音声は到着順に **理想再生モデル**へ入れる: `playStart_k = max(t_k, playEnd_{k-1})`, `playEnd_k = playStart_k + bytes_k / 48`。`queueMs_k = max(0, playEnd_{k-1} − t_k)`。iOS の保持上限 96,000 byte（2,000 ms）超えを `over2000` として数える。
 - 字幕 delta の `t` は到着時刻。
 
+製品と同じ「話者ごとに1セッション」を公開対談から模擬する場合、**採点用の意味区間の時刻で原音を切らない**。その区間の始点・終点は文の実際の音声境界よりずれ得る。原音の語時刻と原文字幕で話者交替点を確認し、連続した発話turn全体を話者トラックに残す。とくに日本語の文末述語・否定・日時が切られていないことを、両トラックの波形と原語字幕で確かめる。切れていたrunは訳文の失点として採用せず、入力・原稿を直して再試験する。[訂正事例](../../docs/pc-speaker-separated-translation-evaluation-2026-10-31.md)を参照。
+
 ## 3. 実行結果（すべて `EVAL_PRIVATE_DIR/runs/<runId>/`）
 
 `runId = <YYYYMMDD-HHMMSS>-<engineId>-<sourceId>-<4文字乱数>`。
@@ -53,11 +55,12 @@ stdout には `summary.json` の内容だけを JSON で出す。本文・path�
 | engineId | 経路 | options（既定値） |
 |---|---|---|
 | `openai-translate` | 現行製品経路。`packages/provider-openai` の `OpenAITranslationProvider` を relay-local と同じ Node `ws` transport で使う（出力の完全無音 200 ms 上限まで製品と同じ）。既定以外のオプションは provider と同じ event 処理・無音規則を持つ薄い client で送る | `noiseReduction=near_field|far_field|none`（near_field）、`inputTranscription=0|1`（0。1 で `audio.input.transcription.model=gpt-realtime-whisper` の原文字幕を取る） |
-| `openai-live` | `wss://api.openai.com/v1/live/sessions`、`session.start` に `model: gpt-live-1`、`instructions`、`audio.format {audio/pcm, 24000}`。`session.input_audio.append` で送る。`session.output_audio.delta` / `session.output_transcript.delta` / `session.input_transcript.delta` を受ける。終端は `session.close`→`session.closed` | `preset=plain|plain-q|domain|domain-glossary|official-short|attribution-q|…`（domain）、`voice`（marin）。末尾2つは研究専用で[結果](../../docs/pc-prompt-and-tail-evaluation-2026-10-30.md)を参照 |
+| `openai-live` | `wss://api.openai.com/v1/live/sessions`、`session.start` に `model: gpt-live-1`、`instructions`、`audio.format {audio/pcm, 24000}`。`session.input_audio.append` で送る。`session.output_audio.delta` / `session.output_transcript.delta` / `session.input_transcript.delta` を受ける。終端は `session.close`→`session.closed` | `preset=plain|plain-q|domain|domain-glossary|official-short|attribution-q|single-track-q|question-safe-q|…`（domain）、`voice`（marin）。`single-track-q` は話者ごとに1入力セッションと明示する研究条件。`question-safe-q` は研究専用で[5分試行](../../docs/question-speech-act-audit-2026-10-31.md#文末まで質問か断定かを待つ指示の試行)では採用不可。`official-short`・`attribution-q` の[結果](../../docs/pc-prompt-and-tail-evaluation-2026-10-30.md)も参照 |
 | `openai-realtime` | Realtime API `session.update {type: realtime}`、`output_modalities: ["audio"]`、`audio.input.turn_detection`、`instructions`。`response.output_audio.delta` / `response.output_audio_transcript.delta` を受ける | `model=gpt-realtime-2.1|gpt-realtime-2.1-mini`（2.1）、`vad=semantic:high|semantic:medium|semantic:low|server:<silence_ms>`（semantic:high）、`interrupt=0|1`（0）、`preset`（domain）、`inputTranscription=0|1`（0） |
 | `cascade` | `gpt-live-transcribe`（streaming ASR）→ 日本語の節単位の区切り → LLM 訳（直前文脈つき）→ streaming TTS。agent B の設計書 `src/engines/cascade/README.md` を正とする | B が定義（`asrDelay`, `segmenter`, `llm`, `tts`, `context`, `glossary` など） |
 | `gemini-live-translate` | Vertex AI の Live API `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`（`global`）。`setup` に `model: projects/<project>/locations/global/publishers/google/models/gemini-3.5-live-translate-preview`、`generationConfig.translationConfig.targetLanguageCode`、`inputAudioTranscription` / `outputAudioTranscription`（setup 直下）。音声は 16 kHz に間引いて `realtimeInput.audio`、終端は `realtimeInput.audioStreamEnd`。`serverContent.modelTurn.parts[].inlineData`（24 kHz）と `outputTranscription` / `inputTranscription` を受ける。通訳専用モデルで instructions・voice は無い。認証は `GOOGLE_ACCESS_TOKEN`（`gcloud auth print-access-token`） | `project`（既定 `GOOGLE_CLOUD_PROJECT`）、`location`（global）、`echo=true|false`（false） |
 | `qwen-live-translate` | Alibaba Cloud Model Studio の `qwen3.8-livetranslate-flash-realtime`。シンガポール/北京のworkspace別WebSocketへ16 kHz PCMを継続送信し、24 kHz PCM訳音声・原文/訳文deltaを受ける。終端は `session.finish`→`session.finished`。公式仕様のhotword辞書と話者検出/音声活動検出を比較できる。入力言語はモデルの自動判定。製品経路には未接続 | `region=singapore|beijing`（singapore）、`hotwords=off|env`（off）、`turnDetection=speaker|server-vad`（speaker）。`DASHSCOPE_API_KEY`、`QWEN_WORKSPACE_ID`を環境に設定。`hotwords=env`なら`QWEN_HOTWORDS_JSON`に `{ "鎌倉": "Kamakura" }` 形式を設定。用語本文・workspace IDはCLI引数やstdoutへ渡さない |
+| `kotoba-live-translate` | fal.ai 上の Kotoba STS。日本語→英語の単一WebSocketへ24 kHz PCMを実時間送信し、24 kHz訳音声と英文字幕を受ける研究用アダプター。`voice_session.update` と `input_audio_buffer.append/commit` を[公式SDK](https://github.com/kotoba-tech/kotoba-python/blob/main/src/kotoba/_ws_s2st.py)に合わせる。製品経路には未接続 | `delay=0..20`（省略時はサーバー既定）。大きいほど先読みを増し品質優先。`FAL_KEY`を環境に設定し、公開・合成音声だけを送る。fal の短区間実接続では、`input_audio_transcription.text.delta` の内容はイベント名と異なり**英訳**だったため、訳字幕として記録する。日本語原文字幕は取得できなかった。費用はセッション継続時間×$0.035/分の概算 |
 
 Qwenのモデル・イベント形式は[公式ガイド](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen3-5-livetranslate-flash-realtime)と[client event](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/live-translator-client-events)に合わせた。公開リポジトリには合成fixtureだけを置く。私有の会話音声をAlibabaへ送る承認は得ていないため、実行する場合もまず公開・合成音声に限定する。`QWEN_HOTWORDS_JSON`の値は記録しないが、件数はprivate eventsに記録する。原文の最終転記が途中deltaを修正した場合はprivate `events.jsonl`の`qwen.input_revision.text`へ記録する。Qwen入力の24→16 kHz変換にはframe間で状態を保持する7 kHz低域フィルタを使い、折り返しを抑える。既存Gemini比較の変換方式は測定値の再現性のため変更していない。
 
@@ -118,6 +121,8 @@ export GOOGLE_CLOUD_PROJECT=niho-app-stg
 npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-translate --frame-ms 200
 # GPT-Live の背景注入 A/B。背景本文は private に保管し、CLI 引数や公開リポへ書かない
 npm --silent run eval:run -- --wav /abs/path.wav --window 150:450 --source-id src1-w1 --engine openai-live --frame-ms 200 --option preset=plain-q --option contextFile="$EVAL_PRIVATE_DIR/work/topic-context.txt"
+# Kotobaの研究用比較。秘密ファイルはGit管理外に置き、値をstdout・CLI引数へ出さない
+FAL_KEY="$(cat /absolute/private/credentials/fal-kotoba-research.key)" npm --silent run eval:run -- --wav /absolute/private/probe-5m.wav --window 0:300 --source-id covost-native-ja-5m-a --engine kotoba-live-translate --frame-ms 200 --tail-silence-sec 20 --finish-timeout-sec 90
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json"
 # 既定の判定器は Claude（ANTHROPIC_API_KEY）。gpt-5.4 で判定するなら --judge-backend openai。--skip-asr で既存の output-words.json を再利用する
 npm --silent run eval:judge -- --run "$EVAL_PRIVATE_DIR/runs/<runId>" --reference "$EVAL_PRIVATE_DIR/reference/src1-w1.json" --judge-backend openai --skip-asr --out-name judgement-gpt54.json
@@ -140,7 +145,7 @@ npm --silent run eval:aggregate -- --runs "$EVAL_PRIVATE_DIR"/runs/*
 
 ## 8. 共通の禁止事項
 
-- 鍵を引数・ファイル・ログ・エラーメッセージに出さない。`OPENAI_API_KEY`・`ANTHROPIC_API_KEY`・`GOOGLE_ACCESS_TOKEN` は環境変数からだけ読む。
+- 鍵をCLI引数・Git管理下のファイル・ログ・エラーメッセージに出さない。研究用の鍵はオーナーが承認したGit管理外の秘密ファイル（本人のみ読み取り可能）に保管し、`FAL_KEY`などの環境変数からプロセス内で読む。
 - 原文・訳文・音声・実データの path を `research/**`、tests、CI、stdout に出さない（stdout は集計 JSON のみ）。
 - `packages/**`、`ios/**`、`examples/**`、`scripts/**` を変更しない（製品経路の比較対象を固定するため）。
 - 他担当の path を編集しない。`engine.ts`・`prompts/**`・本 README の変更が必要なら、変更内容をメイン担当へ報告して止まる。

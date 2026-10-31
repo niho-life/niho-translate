@@ -28,6 +28,8 @@ export interface TableRow {
   readonly factErrorsByType: Readonly<Partial<Record<FactType, number>>> | null;
   readonly omission: number | null;
   readonly hallucination: number | null;
+  /** 質問への回答・断定化。質問数は各referenceで確認する。 */
+  readonly answeredQuestion: number | null;
   /** run ごとの最大値。 */
   readonly firstAudioOutMs: number | null;
   readonly queueMaxMs: number | null;
@@ -66,6 +68,10 @@ export function buildRows(runs: ReadonlyArray<RunRecord>): TableRow[] {
     const first = list[0] as RunRecord;
     // 旧 run で judgement.json に保存された字幕代理判定も、音声遅延へ混ぜない。
     const judged = list.filter((r) => r.judgement !== null && r.judgement.judge.asr !== "engine-subtitle");
+    const rubricVersions = new Set(judged.map((r) => (r.judgement as JudgeDocument).judge.promptVersion));
+    if (rubricVersions.size > 1) {
+      throw new Error(`cannot pool different judge prompt versions for ${first.summary.engineId} ${optionLabel(first.summary.config)}`);
+    }
     const segments: JudgedSegment[] = judged.flatMap((r) => [...(r.judgement as JudgeDocument).segments]);
     const agg = judged.length > 0 ? computeAggregate(segments) : null;
     const costs = list.map((r) => r.summary.costUsdEstimate);
@@ -86,6 +92,7 @@ export function buildRows(runs: ReadonlyArray<RunRecord>): TableRow[] {
       factErrorsByType: agg ? (agg.factErrorsByType ?? {}) : null,
       omission: agg ? (agg.flagCounts.omission ?? 0) : null,
       hallucination: agg ? (agg.flagCounts.hallucination ?? 0) : null,
+      answeredQuestion: agg ? (agg.flagCounts.answered_question ?? 0) : null,
       firstAudioOutMs: maxOrNull(list.map((r) => r.summary.firstAudioOutMs)),
       queueMaxMs: maxOrNull(list.map((r) => r.summary.queue?.maxMs)),
       over2000Count: list.reduce((sum, r) => sum + (r.summary.queue?.over2000Count ?? 0), 0),
@@ -111,13 +118,13 @@ export function factErrorsLabel(byType: Readonly<Partial<Record<FactType, number
 
 export function renderTable(rows: ReadonlyArray<TableRow>): string {
   const lines = [
-    "| engine | options | judged/runs | sources | n | lStart p50 (s) | lStart p95 (s) | lStart max (s) | within8s | meaning | criticalFactErrors | factErrorsByType | omission | hallucination | firstAudioOutMs | queue.maxMs | over2000Count | costUsd |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|",
+    "| engine | options | judged/runs | sources | n | lStart p50 (s) | lStart p95 (s) | lStart max (s) | within8s | meaning | criticalFactErrors | factErrorsByType | omission | hallucination | answeredQuestion | firstAudioOutMs | queue.maxMs | over2000Count | costUsd |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|",
   ];
   for (const r of rows) {
     const cost = r.costUsd === null ? dash : `${r.costPartial ? "≥" : ""}${r.costUsd.toFixed(3)}`;
     lines.push(
-      `| ${esc(r.engine)} | ${esc(r.options)} | ${r.judgedRuns}/${r.runs} | ${r.sources} | ${int(r.n)} | ${s1(r.lStartP50Ms)} | ${s1(r.lStartP95Ms)} | ${s1(r.lStartMaxMs)} | ${r.within8s === null ? dash : `${Math.round(r.within8s * 100)}%`} | ${r.meaningMean === null ? dash : r.meaningMean.toFixed(2)} | ${int(r.criticalFactErrors)} | ${factErrorsLabel(r.factErrorsByType)} | ${int(r.omission)} | ${int(r.hallucination)} | ${int(r.firstAudioOutMs)} | ${int(r.queueMaxMs)} | ${r.over2000Count} | ${cost} |`,
+      `| ${esc(r.engine)} | ${esc(r.options)} | ${r.judgedRuns}/${r.runs} | ${r.sources} | ${int(r.n)} | ${s1(r.lStartP50Ms)} | ${s1(r.lStartP95Ms)} | ${s1(r.lStartMaxMs)} | ${r.within8s === null ? dash : `${Math.round(r.within8s * 100)}%`} | ${r.meaningMean === null ? dash : r.meaningMean.toFixed(2)} | ${int(r.criticalFactErrors)} | ${factErrorsLabel(r.factErrorsByType)} | ${int(r.omission)} | ${int(r.hallucination)} | ${int(r.answeredQuestion)} | ${int(r.firstAudioOutMs)} | ${int(r.queueMaxMs)} | ${r.over2000Count} | ${cost} |`,
     );
   }
   lines.push(

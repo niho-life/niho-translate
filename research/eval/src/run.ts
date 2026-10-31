@@ -31,6 +31,7 @@ import {
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const START_TIMEOUT_MS = 30_000;
+const KOTOBA_START_TIMEOUT_MS = 250_000; // fal may cold-start the model before the WebSocket session is ready.
 const FAILED_START_FINISH_TIMEOUT_MS = 5_000;
 /** mixed.wav の L（原音）の倍率。 */
 const SOURCE_GAIN = 0.8;
@@ -410,7 +411,7 @@ function installInterruptHandler(): { readonly requested: boolean; dispose(): vo
 export async function runHarness(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv): Promise<number> {
   const args = parseCliArgs(argv);
   const apiKey = (env.OPENAI_API_KEY ?? "").trim();
-  if (!apiKey && args.engineId !== "gemini-live-translate" && args.engineId !== "qwen-live-translate") {
+  if (!apiKey && args.engineId !== "gemini-live-translate" && args.engineId !== "qwen-live-translate" && args.engineId !== "kotoba-live-translate") {
     throw new HarnessError("OPENAI_API_KEY_MISSING");
   }
   const outRoot = resolveOutRoot(args.outRoot, env.EVAL_PRIVATE_DIR);
@@ -429,10 +430,12 @@ export async function runHarness(argv: ReadonlyArray<string>, env: NodeJS.Proces
     // option の検査はここで（接続より前）。
     const googleAccessToken = (env.GOOGLE_ACCESS_TOKEN ?? "").trim();
     const qwenApiKey = (env.DASHSCOPE_API_KEY ?? "").trim();
+    const falApiKey = (env.FAL_KEY ?? "").trim();
     engine = factory(config, recorder, {
       openaiApiKey: apiKey,
       ...(googleAccessToken ? { googleAccessToken } : {}),
       ...(qwenApiKey ? { qwenApiKey } : {}),
+      ...(falApiKey ? { falApiKey } : {}),
     });
   } catch (error) {
     if (error instanceof EngineError || error instanceof HarnessError) throw error;
@@ -483,7 +486,8 @@ export async function runHarness(argv: ReadonlyArray<string>, env: NodeJS.Proces
     const startCalledAt = clock.now();
     let ready = false;
     try {
-      await withTimeout(Promise.resolve().then(() => engine.start()), START_TIMEOUT_MS, "ENGINE_START_TIMEOUT");
+      const startTimeoutMs = args.engineId === "kotoba-live-translate" ? KOTOBA_START_TIMEOUT_MS : START_TIMEOUT_MS;
+      await withTimeout(Promise.resolve().then(() => engine.start()), startTimeoutMs, "ENGINE_START_TIMEOUT");
       ready = true;
       recorder.mark(t => ({ type: "engine.ready", t }));
     } catch (error) {

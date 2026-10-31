@@ -119,6 +119,7 @@ describe("buildRows", () => {
     expect(pooled.factErrorsByType).toEqual({ number: 1, place: 1 });
     expect(pooled.omission).toBe(1);
     expect(pooled.hallucination).toBe(1);
+    expect(pooled.answeredQuestion).toBe(0);
     expect(pooled.firstAudioOutMs).toBe(3_000);
     expect(pooled.queueMaxMs).toBe(2_500);
     expect(pooled.over2000Count).toBe(3);
@@ -142,16 +143,30 @@ describe("buildRows", () => {
     expect(row).toMatchObject({ runs: 2, judgedRuns: 1, n: 2, lStartP50Ms: 3_000, within8s: 0.5, meaningMean: 2 });
   });
 
+  it("rejects pooling different judge rubrics for the same engine and options", () => {
+    const oldRun = runs[0]!;
+    const newer = judgement([seg("new", 3_000)]);
+    const newRun: RunRecord = {
+      summary: summary({ engineId: "openai-translate", sourceId: "src2-w1" }),
+      judgement: { ...newer, judge: { ...newer.judge, promptVersion: "v3" } },
+    };
+    expect(() => buildRows([oldRun, newRun])).toThrow(/different judge prompt versions/);
+  });
+
   it("renders a numeric Markdown table without text or paths", () => {
     const table = renderTable(rows);
     const lines = table.split("\n");
     expect(lines[0]).toMatch(/^\| engine \| options \| judged\/runs/);
+    const columns = (line: string): number => line.split("|").slice(1, -1).length;
+    expect(columns(lines[0]!)).toBe(19);
+    expect(columns(lines[1]!)).toBe(columns(lines[0]!));
+    expect(columns(lines[3]!)).toBe(columns(lines[0]!));
     expect(lines[3]).toBe(
-      "| openai-translate | frame=200 | 2/2 | 2 | 5 | 4.0 | 9.0 | 9.0 | 60% | 2.00 | 2 | number=1 place=1 | 1 | 1 | 3000 | 2500 | 3 | ≥0.100 |",
+      "| openai-translate | frame=200 | 2/2 | 2 | 5 | 4.0 | 9.0 | 9.0 | 60% | 2.00 | 2 | number=1 place=1 | 1 | 1 | 0 | 3000 | 2500 | 3 | ≥0.100 |",
     );
-    expect(lines[4]).toContain("| openai-translate | frame=200 noiseReduction=far_field | 0/1 | 1 | — | — | — | — | — | — | — | — | — | — | 2500 | 1000 | 0 | 0.050 |");
+    expect(lines[4]).toContain("| openai-translate | frame=200 noiseReduction=far_field | 0/1 | 1 | — | — | — | — | — | — | — | — | — | — | — | 2500 | 1000 | 0 | 0.050 |");
     // cascade: criticalFactErrors 0, factErrorsByType "0"（判定ありで wrong なし）
-    expect(lines[2]).toBe("| cascade | frame=200 | 1/1 | 1 | 1 | 5.0 | 5.0 | 5.0 | 100% | 3.00 | 0 | 0 | 0 | 0 | — | 1000 | 0 | 0.020 |");
+    expect(lines[2]).toBe("| cascade | frame=200 | 1/1 | 1 | 1 | 5.0 | 5.0 | 5.0 | 100% | 3.00 | 0 | 0 | 0 | 0 | 0 | — | 1000 | 0 | 0.020 |");
     expect(table).not.toMatch(/src1-w1|src2-w1|\/Users\/|whisper|gpt-5/);
   });
 });

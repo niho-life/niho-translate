@@ -181,11 +181,13 @@ describe("validateBatchResponse", () => {
 
 describe("judgeInstructions", () => {
   it("versions the legal-right rubric without changing prior evaluations", () => {
-    expect(DEFAULT_PROMPT_VERSION).toBe("v2");
+    expect(DEFAULT_PROMPT_VERSION).toBe("v3");
     expect(judgeInstructions("v1")).not.toContain("legal_right");
     expect(judgeInstructions("v2")).toContain("legal_right (property ownership or leasehold rights)");
     expect(judgeInstructions("v2")).toContain("subject, legal right or place name caps the score at 1");
     expect(judgeInstructions("v2")).toContain('所有権 → "for sale"');
+    expect(judgeInstructions("v3")).toContain("QUESTION SPEECH ACT");
+    expect(judgeInstructions("v3")).toContain("Are there even any?");
   });
 
   it("states the rubric, the first-meaning-word rule and the flags", () => {

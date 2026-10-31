@@ -2,7 +2,7 @@
  * 判定 CLI（agent D）。
  *   --run <runDir> --reference <abs json> [--judge-backend openai|agy|anthropic|codex] [--model <id>] [--skip-asr]
  *   [--word-source audio|subtitle]
- *   [--batch 15（agy は 8）] [--prompt-version v1] [--effort medium] [--out-name judgement.json]
+ *   [--batch 15（agy / codex は 8）] [--prompt-version v3] [--effort medium] [--out-name judgement.json]
  * --model の既定は openai なら gpt-5.4、agy なら claude-opus-4-6-thinking、anthropic なら claude-opus-5-5
  *（judge.model は "agy:<id>" / "anthropic:<id>"）。anthropic は Anthropic API を直接呼ぶ第二審判（鍵は ANTHROPIC_API_KEY）。
  * --effort の既定は openai medium / anthropic high / agy なし。--judge-backend の既定は anthropic（2026-10-28 から。gpt-5.4 は openai で第二審判）。

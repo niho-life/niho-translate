@@ -61,6 +61,6 @@ lease拒否・失効・usage失敗後はsourceをblockedにし、audio packetご
 
 ## v1の実通訳relay
 
-送信バッファを観測でき、native ping/pongを使う `examples/relay-local` のreal modeを選びます。名前はlocalですが、実API・JWT・外部Authorityの経路を持ちます。loopbackの前にTLS終端proxyを置き、単一processへroutingしてください。複数processへそのまま増やしてはいけません。ホストの接続先と配備設定の反映は別途必要です。
+送信バッファを観測でき、native ping/pongを使う `examples/relay-local` のreal modeを選びます。名前はlocalですが、実API・JWT・外部Authorityの経路を持ちます。既定は`HOST=127.0.0.1`です。loopbackの前にTLS終端proxyを置くか、TLSを終端するコンテナ基盤で`HOST=0.0.0.0`と基盤の`PORT`を明示し、単一processへroutingしてください。`HOST`はこの2値以外を拒否します。複数processへそのまま増やしてはいけません。ホストの接続先と配備設定の反映は別途必要です。
 
 現在の `examples/relay-cloudflare` は送信バッファを観測できず、provider設定前に停止します。周期 `session.update` による代替のhealth checkは意味欠落を再現したため廃止しました。未観測値を0にしたり、無音中に返らない翻訳を配送ACK扱いしたりして有効化しないでください。

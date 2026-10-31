@@ -31,6 +31,8 @@ const mode = process.env.RELAY_MODE ?? "mock";
 // Default route since the 2026-10-29 evaluation (docs/translation-quality-eval-2026-10-28.md §8.11).
 // TRANSLATE_PROVIDER=translate selects the previous gpt-realtime-translate route.
 const translateProvider = process.env.TRANSLATE_PROVIDER ?? "live";
+const host = process.env.HOST ?? "127.0.0.1";
+if (host !== "127.0.0.1" && host !== "0.0.0.0") throw new Error("INVALID_HOST");
 const port = Number(process.env.PORT ?? "8787");
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("INVALID_PORT");
 
@@ -331,11 +333,11 @@ function main(): void {
     }
     pendingMessages.length = 0;
   });
-  server.listen(port, "127.0.0.1", () => {
+  server.listen(port, host, () => {
     const address = server.address();
     const listeningPort = typeof address === "object" && address ? address.port : port;
     const label = mode === "real" ? `${mode}, ${translateProvider}` : mode;
-    process.stdout.write(`relay-local listening on 127.0.0.1:${listeningPort} (${label})\n`);
+    process.stdout.write(`relay-local listening on ${host}:${listeningPort} (${label})\n`);
   });
   const shutdown = () => {
     void relay.dispose().finally(() => server.close());

@@ -17,8 +17,9 @@ npm -C examples/relay-local start
 - `TICKET_ISSUER`、`AUDIENCE`、`JWKS_URL`、`TICKET_ALGORITHM`（EdDSAまたはRS256）
 - `OPENAI_API_KEY`
 - 任意の`PORT`（既定8787）
+- 任意の`HOST`（既定`127.0.0.1`。明示的な`0.0.0.0`だけ追加許可。それ以外は起動時に拒否）
 
-real modeもloopbackへbindします。TLS終端proxyを前に置き、iPhoneの固定WSS URLから同じprocessへrouteします。ホストはscoped ticketの発行・認可・費用leaseを保持し、OpenAI keyを端末へ渡しません。room registryはmemory上の単一process専用です。水平分散・再起動復帰にはroom placementとprivate Authorityの永続境界が別途必要です。
+real modeも既定でloopbackへbindします。TLS終端proxyを前に置き、iPhoneの固定WSS URLから同じprocessへrouteします。Cloud RunなどTLSを終端するコンテナ基盤では`HOST=0.0.0.0`を明示し、基盤が注入する`PORT`で待ち受けます。ホストはscoped ticketの発行・認可・費用leaseを保持し、OpenAI keyを端末へ渡しません。room registryはmemory上の単一process専用です。水平分散・再起動復帰にはroom placementとprivate Authorityの永続境界が別途必要です。
 
 providerの送信量はnative `bufferedAmount`で上限を検証します。native ping/pongは5秒間隔・5秒期限で固有payloadを照合し、無音中も翻訳設定を変えません。音声・字幕・APIレスポンス本文をログへ出しません。
 

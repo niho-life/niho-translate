@@ -14,6 +14,7 @@
 - offline WAV replay: fake transportを注入した実provider adapterの可変長deltaの無音正規化後の音声一致と、`127.0.0.1`のreference mock relayへ実WebSocket 2接続した双方向protocol/ACK/byte順序/自己配信なし。WAVなしはメモリ上の非音声PCM、WAV指定時は最大60秒をffmpegで24 kHz mono PCM16へ変換し、音声・字幕・path・filename・PCMを保存または表示しない
 - SwiftPM macOS build/testとiOS 15.5 simulator SDK source/example typecheck
 - 有声の訳音声がhard上限で落ちた場合のみ、会話中に消えない日英の確認警告を表示する。無音drop、soft超過、旧世代callbackでは警告しない。実機では警告文の表示と読み上げの妨げにならないことを確認する
+- 接続前に日英でAI誤訳の可能性と重要事項の再確認を案内する。実機ではVoiceOverと小画面で同意ボタンまで読めることを確認する
 - provider終了/期限: 末尾音声と遅いcontrol ACK、flush ACKなし/未送信input破棄時はoutputDrained=false、再入する予期せぬ切断の一度だけの通知、仮想時計での1時間期限・期限後input拒否、relayの安全停止・明示resume・旧provider末尾の破棄
 
 ## 公開前に手動で残る項目

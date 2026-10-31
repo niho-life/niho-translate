@@ -13,6 +13,7 @@
 - Swift core/Session fake: input/output PCM、captionOnly、room/identity/ping/ACK encoding、delivery順序/reset、bounded outgoing/inflight、self/speaker generation gate、connection/task callback fence、Native ping single-flight/pong/timeout/旧callback gate、private route no-auto-resumeと明示capture再開、退出後のsocket/audio/permission/send完了破棄、同一Sessionのticket再試行拒否、PCM先行予約、soft上限超過のbackpressure観測（区間ごとに1回・拒否なし）、hard上限で未予約の完全無音→新しい完全無音片→最古の片の順のdropと順序を保った再生継続（最小の非ゼロsampleを含む片は音声扱い）、深さ・最大・soft超過ms・drop（無音/音声）・underflowのcounters、`playbackQueueLimits`の既定値（2.0秒/5.0秒）・範囲検証・反映、発話の切れ目のまとめ出しを模した理想再生でdropなし、30秒分の過剰到着で未再生が5秒に収まり最新の片まで再生、overflowでSessionを止めず`errorCode`を変えない`PLAYBACK_BACKPRESSURE_SOFT`/`PLAYBACK_BACKPRESSURE_DROP`の分類、pause/reset、旧completion/観測callback fence
 - offline WAV replay: fake transportを注入した実provider adapterの可変長deltaの無音正規化後の音声一致と、`127.0.0.1`のreference mock relayへ実WebSocket 2接続した双方向protocol/ACK/byte順序/自己配信なし。WAVなしはメモリ上の非音声PCM、WAV指定時は最大60秒をffmpegで24 kHz mono PCM16へ変換し、音声・字幕・path・filename・PCMを保存または表示しない
 - SwiftPM macOS build/testとiOS 15.5 simulator SDK source/example typecheck
+- 有声の訳音声がhard上限で落ちた場合のみ、会話中に消えない日英の確認警告を表示する。無音drop、soft超過、旧世代callbackでは警告しない。実機では警告文の表示と読み上げの妨げにならないことを確認する
 - provider終了/期限: 末尾音声と遅いcontrol ACK、flush ACKなし/未送信input破棄時はoutputDrained=false、再入する予期せぬ切断の一度だけの通知、仮想時計での1時間期限・期限後input拒否、relayの安全停止・明示resume・旧provider末尾の破棄
 
 ## 公開前に手動で残る項目

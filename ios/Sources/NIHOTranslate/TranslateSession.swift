@@ -155,6 +155,8 @@ public final class TranslateSession: ObservableObject {
     /// `PLAYBACK_BACKPRESSURE_SOFT` or `PLAYBACK_BACKPRESSURE_DROP`; neither stops the session or
     /// sets `errorCode`. Counters are in `playbackDiagnostics()`.
     @Published public private(set) var playbackPressure: PlaybackPressureEvent?
+    /// Sticky for this room session: a voiced translated chunk was omitted from playback.
+    @Published public private(set) var translatedSpeechWasOmitted = false
 
     public let config: TranslateConnectionConfig
 
@@ -471,6 +473,9 @@ public final class TranslateSession: ObservableObject {
                     self.playbackGeneration == generation
                 else { return }
                 self.playbackPressure = event
+                if case .overflow(let drop) = event, drop.voicedBytes > 0 {
+                    self.translatedSpeechWasOmitted = true
+                }
             }
         }
     }
@@ -705,6 +710,7 @@ public final class TranslateSession: ObservableObject {
         speakerGate.removeAll()
         participants = []
         captions = []
+        translatedSpeechWasOmitted = false
     }
 
     private func pauseForPrivateRouteLoss(sendPause: Bool) {

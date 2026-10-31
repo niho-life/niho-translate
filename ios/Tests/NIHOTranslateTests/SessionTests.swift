@@ -470,6 +470,7 @@ final class SessionTests: XCTestCase {
         await settle()
         XCTAssertEqual(session.playbackPressure, .backpressure(depthBytes: 28_800))
         XCTAssertEqual(session.playbackPressure?.code, "PLAYBACK_BACKPRESSURE_SOFT")
+        XCTAssertFalse(session.translatedSpeechWasOmitted)
         XCTAssertEqual(session.connectionStatus, .connected)
         XCTAssertNil(session.errorCode)
 
@@ -480,6 +481,10 @@ final class SessionTests: XCTestCase {
             .overflow(PlaybackDrop(voicedChunks: 1, voicedBytes: 9_600))
         )
         XCTAssertEqual(session.playbackPressure?.code, "PLAYBACK_BACKPRESSURE_DROP")
+        XCTAssertTrue(session.translatedSpeechWasOmitted)
+        audio.pressure(.backpressure(depthBytes: 28_800))
+        await settle()
+        XCTAssertTrue(session.translatedSpeechWasOmitted)
 
         XCTAssertEqual(session.connectionStatus, .connected)
         XCTAssertNil(session.errorCode)
@@ -497,6 +502,7 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(diagnostics.droppedSilentMs, 0)
 
         session.leave()
+        XCTAssertFalse(session.translatedSpeechWasOmitted)
         XCTAssertEqual(session.playbackDiagnostics().overflowCount, 1)
         XCTAssertEqual(session.playbackDiagnostics().depthBytes, 0)
     }
@@ -541,6 +547,7 @@ final class SessionTests: XCTestCase {
         audio.pressure(.overflow(PlaybackDrop(voicedChunks: 1, voicedBytes: 4_800)), generation: -1)
         await settle()
         XCTAssertNil(session.playbackPressure)
+        XCTAssertFalse(session.translatedSpeechWasOmitted)
         XCTAssertEqual(session.connectionStatus, .connected)
         XCTAssertNil(session.errorCode)
 
@@ -576,6 +583,7 @@ final class SessionTests: XCTestCase {
         await settle()
 
         XCTAssertEqual(session.playbackPressure?.code, PlaybackPressureEvent.overflowCode)
+        XCTAssertFalse(session.translatedSpeechWasOmitted)
         XCTAssertEqual(session.connectionStatus, .connected)
         XCTAssertEqual(session.errorCode, "LEASE_EXPIRED")
         XCTAssertEqual(transport.disconnectCount, 0)
@@ -602,6 +610,7 @@ final class SessionTests: XCTestCase {
         await settle()
 
         XCTAssertNil(session.playbackPressure)
+        XCTAssertFalse(session.translatedSpeechWasOmitted)
         XCTAssertEqual(session.connectionStatus, .disconnected)
         XCTAssertEqual(session.errorCode, "PROVIDER_ERROR")
         XCTAssertEqual(transport.disconnectCount, disconnectCount)

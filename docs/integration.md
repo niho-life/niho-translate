@@ -1,6 +1,6 @@
 # 統合手順とGeneric Authority契約
 
-ホストアプリはログイン、invite/admission、room state、global budget、マイク権限文言、background audio modeの正本です。SDKへprivate bearer/cookie/user IDを渡さず、固定WSS URL、短命scoped ticket、仮名room/participant ID、admit済みrole/source/targetだけを渡します。
+ホストアプリはログイン、invite/admission、room state、global budget、マイク権限文言、通常アプリのbackground audio設定とApp Clipのforeground制御の正本です。SDKへprivate bearer/cookie/user IDを渡さず、固定WSS URL、短命scoped ticket、仮名room/participant ID、admit済みrole/source/targetだけを渡します。
 
 接続順は次のとおりです。
 
@@ -56,7 +56,15 @@ lease拒否・失効・usage失敗後はsourceをblockedにし、audio packetご
 
 ## iOS host app
 
-`NSMicrophoneUsageDescription`、Audio background mode、認証・invite UIはhost appが定義します。Bluetooth HFPまたは有線headsetはplayback準備時にinputとoutputの両方を検証します。マイクmuteはcaptureだけを止め、翻訳再生を止めません。切断やroute喪失・interruption時はcapture/playbackを止めてaudio sessionをdeactivateし、speakerへ自動切替せず、route復帰後も利用者の明示操作までresumeしません。明示resume時にもprivate input/outputを再検証し、失敗時はmute/listening pauseを維持します。
+`NSMicrophoneUsageDescription`、通常アプリで必要なAudio background mode、認証・invite UIはhost appが定義します。Bluetooth HFPまたは有線headsetはplayback準備時にinputとoutputの両方を検証します。マイクmuteはcaptureだけを止め、翻訳再生を止めません。切断やroute喪失・interruption時はcapture/playbackを止めてaudio sessionをdeactivateし、speakerへ自動切替せず、route復帰後も利用者の明示操作までresumeしません。明示resume時にもprivate input/outputを再検証し、失敗時はmute/listening pauseを維持します。
+
+### App Clip
+
+App Clipは[Appleの制約](https://developer.apple.com/documentation/appclip/choosing-the-right-functionality-for-your-app-clip)によりbackground動作を利用できません。通常アプリのbackground audio設定をそのまま適用せず、`UIBackgroundModes`を宣言しないでください。マイク利用の目的説明と利用者の明示同意は引き続き必要です。
+
+- 画面を開いたまま利用することを参加前に案内します。通訳画面の表示中だけ自動ロックを抑制する場合は、画面終了時に以前の設定へ戻します。
+- hostがbackground移行を検出したら、admission/ticket取得中の待機をcancelし、既存の`TranslateSession`には`leave()`を呼びます。SDKのroute切断や接続監視だけに画面のlifecycle制御を任せないでください。
+- foregroundへ戻ってもマイクを自動再開しません。利用者の明示操作後、fresh scoped ticketと新しいSessionで入り直します。同じSessionを再利用しない契約はApp Clipでも同じです。
 
 
 ## v1の実通訳relay

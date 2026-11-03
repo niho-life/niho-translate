@@ -26,6 +26,8 @@ source/target languageはroom途中で変更しません。変更時はprivate a
 
 `TranslateSession`は接続試行1回に使います。退出、接続失敗、接続後の同意取消後は同じinstanceを再接続せず、ホスト側で新しいscoped ticketとSessionを用意して明示的に入り直します。回線の復帰やイヤフォンの再接続だけでは、マイクを自動再開しません。詳細は[統合手順](docs/integration.md)を確認してください。
 
+App Clipへの組み込みでは、hostがforegroundでの利用を案内し、background移行時に待機中の参加処理とSessionを停止します。[App Clipの統合条件](docs/integration.md#app-clip)も確認してください。
+
 ## Reference relay
 
 ```sh

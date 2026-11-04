@@ -1270,6 +1270,32 @@ describe("relay orchestration", () => {
     await restartedRelay.dispose();
   });
 
+  it("keeps participant generations monotonic after same-process owner reacquisition", async () => {
+    const clock = new Clock();
+    const testAuthority = authority(() => clock.now());
+    const relay = new RelayOrchestrator(verifier, testAuthority, new Factory(), clock);
+    const oldPeer = new Peer();
+    const oldConnection = await relay.connect("Bearer host-ja#before-owner-loss", oldPeer);
+    expect(oldConnection!.generation).toBe(1);
+    await relay.receive("r", "e", "host-ja", oldConnection!.generation, JSON.stringify({ v: 1, type: "client.ready" }));
+
+    clock.time = testAuthority.ownerExpiresAtMs;
+    await relay.tick();
+    await flushAsync();
+    expect(oldPeer.closed).toEqual([1013, "room-owner-lost"]);
+
+    const newPeer = new Peer();
+    const newConnection = await relay.connect("Bearer host-ja#after-owner-loss", newPeer);
+    expect(newConnection!.generation).toBe(2);
+    await relay.receive("r", "e", "host-ja", newConnection!.generation, JSON.stringify({ v: 1, type: "client.ready" }));
+
+    await relay.receive("r", "e", "host-ja", oldConnection!.generation, JSON.stringify({ v: 1, type: "room.end" }));
+    await relay.peerClosed("r", "e", "host-ja", oldConnection!.generation);
+    expect(testAuthority.roomState).toBe("waiting");
+    expect(newPeer.closed).toBeUndefined();
+    await relay.dispose();
+  });
+
   it("stops sends on owner expiry and drops a provider callback that arrives afterward", async () => {
     const clock = new Clock();
     const testAuthority = authority(() => clock.now());

@@ -211,6 +211,7 @@ interface Connection {
 interface RoomOwnerState extends RoomOwnerLease {
   roomId: string;
   roomEpoch: string;
+  generationByParticipant: Map<string, number>;
   renewInFlight: boolean;
   lost: boolean;
 }
@@ -273,6 +274,7 @@ export class RelayOrchestrator {
         this.pruneRooms(this.clock.now());
         if (this.tombstones.has(roomKey)) throw new Error("ROOM_ENDED");
         let roomOwner = this.roomOwners.get(roomKey);
+        let generationByParticipant = roomOwner?.generationByParticipant;
         if (roomOwner && (roomOwner.lost || (roomOwner.fencingToken > 0 && !this.roomOwnerIsCurrent(roomOwner)))) {
           this.markRoomOwnerLost(roomOwner);
           await this.stopLostRoomOwner(roomKey, roomOwner);
@@ -283,6 +285,7 @@ export class RelayOrchestrator {
             leaseId: crypto.randomUUID(),
             roomId: claims.roomId,
             roomEpoch: claims.roomEpoch,
+            generationByParticipant: generationByParticipant ?? new Map(),
             fencingToken: 0,
             expiresAtMs: 0,
             renewInFlight: false,
@@ -333,7 +336,8 @@ export class RelayOrchestrator {
           targetLanguage: authorityAdmission.targetLanguage,
           admissionId: authorityAdmission.admissionId,
         };
-        const result = room.admit(admission, this.clock.now());
+        const generationFloor = (roomOwner.generationByParticipant.get(claims.participantId) ?? 0) + 1;
+        const result = room.admit(admission, this.clock.now(), generationFloor);
         if (!result.ok) {
           if (result.code === "ROOM_ENDED") {
             this.markTombstone(roomKey, this.clock.now());
@@ -346,6 +350,7 @@ export class RelayOrchestrator {
           peer.close(1008, result.code);
           return undefined;
         }
+        roomOwner.generationByParticipant.set(claims.participantId, result.generation);
         const connectionKey = this.connectionKey(roomKey, claims.participantId);
         const old = this.connections.get(connectionKey);
         if (old) {

@@ -75,6 +75,13 @@ describe("RoomActor security and lifecycle", () => {
     }, 1)).toBe(false);
   });
 
+  it("starts a recreated participant actor at its supplied generation floor", () => {
+    const room = new RoomActor("r", "e");
+    expect(room.admit(host, 0, 4)).toEqual({ ok: true, generation: 4 });
+    expect(room.isCurrent("h", 1)).toBe(false);
+    expect(room.isCurrent("h", 4)).toBe(true);
+  });
+
   it("irreversibly ends at the room lifetime limit", () => {
     const lifetimeRoom = activeRoom();
     lifetimeRoom.tick(ROOM_MAX_LIFETIME_MS);

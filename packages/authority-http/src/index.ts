@@ -2,6 +2,8 @@ import type {
   Authority,
   ControlRoomContext,
   PresenceSyncRequest,
+  RoomOwnerClaim,
+  RoomOwnerProof,
   TicketClaims,
 } from "../../relay-core/src/index.ts";
 
@@ -37,8 +39,12 @@ export class HttpAuthority implements Authority {
     this.fetchImplementation = options.fetch ?? globalThis.fetch;
   }
 
-  admit(claims: Readonly<TicketClaims>) {
-    return this.call("admit", claims) as ReturnType<Authority["admit"]>;
+  admit(claims: Readonly<TicketClaims>, owner: Readonly<RoomOwnerClaim>) {
+    return this.call("admit", { ...claims, roomOwner: owner }) as ReturnType<Authority["admit"]>;
+  }
+
+  renewRoomOwnership(value: { roomId: string; roomEpoch: string; roomOwner: RoomOwnerProof }) {
+    return this.call("rooms/owner/renew", value) as ReturnType<Authority["renewRoomOwnership"]>;
   }
 
   controlRoom(context: Readonly<ControlRoomContext>) {

@@ -45,6 +45,9 @@ export {
 } from "./delivery.ts";
 
 const LEASE_MAX_LIFETIME_MS = 15_000;
+const ROOM_OWNER_LEASE_MS = 10_000;
+const ROOM_OWNER_RENEW_WINDOW_MS = 5_000;
+const ROOM_OWNER_EXPIRY_SAFETY_MS = 1_000;
 const AUDIO_BURST_MS = 200;
 const USAGE_BATCH_AUDIO_MS = 1_000;
 const DEFAULT_AUTHORITY_TIMEOUT_MS = 5_000;
@@ -54,14 +57,32 @@ const PRESENCE_SYNC_MS = 5_000;
 const CLIENT_PING_TIMEOUT_MS = 15_000;
 export const MAX_PENDING_CLIENT_OPERATIONS = 32;
 
-export interface AuthorityAdmission {
+export interface RoomOwnerClaim {
+  leaseId: string;
+  fencingToken?: number;
+}
+
+export interface RoomOwnerProof {
+  leaseId: string;
+  fencingToken: number;
+}
+
+export interface RoomOwnerLease extends RoomOwnerProof {
+  expiresAtMs: number;
+}
+
+export type AuthorityAdmission =
+  | { status: "busy"; retryAfterMs: number }
+  | {
+  status: "admitted";
   admissionId: string;
   role: ParticipantRole;
   sourceLanguage: Language;
   targetLanguage: Language;
   roomEpoch: string;
   roomState: AuthorityRoomState;
-}
+  roomOwner: RoomOwnerLease;
+};
 
 export interface BudgetLease {
   leaseId: string;
@@ -88,6 +109,7 @@ export interface ControlRoomContext {
   generation: number;
   action: RoomControlAction;
   cause: "host" | "lifecycle";
+  roomOwner: RoomOwnerProof;
 }
 
 export interface PresenceParticipant {
@@ -101,6 +123,7 @@ export interface PresenceSyncRequest {
   roomId: string;
   roomEpoch: string;
   participants: PresenceParticipant[];
+  roomOwner: RoomOwnerProof;
 }
 
 export interface PresenceSyncResponse {
@@ -110,12 +133,13 @@ export interface PresenceSyncResponse {
 }
 
 export interface Authority {
-  /** admit must atomically consume ticket.jti in durable storage. */
-  admit(ticket: Readonly<TicketClaims>): Promise<AuthorityAdmission>;
+  /** Ownership is checked before jti consumption. A busy result leaves the ticket unused. */
+  admit(ticket: Readonly<TicketClaims>, owner: Readonly<RoomOwnerClaim>): Promise<AuthorityAdmission>;
+  renewRoomOwnership(input: { roomId: string; roomEpoch: string; roomOwner: RoomOwnerProof }): Promise<RoomOwnerLease>;
   controlRoom(context: Readonly<ControlRoomContext>): Promise<{ roomEpoch: string; state: AuthorityRoomState }>;
   syncPresence(input: Readonly<PresenceSyncRequest>): Promise<PresenceSyncResponse>;
-  acquireLease(input: { roomId: string; roomEpoch: string; participantId: string; admissionId: string; generation: number }): Promise<BudgetLease>;
-  renewLease(input: { leaseId: string; roomId: string; roomEpoch: string; participantId: string; admissionId: string; generation: number }): Promise<BudgetLease>;
+  acquireLease(input: { roomId: string; roomEpoch: string; participantId: string; admissionId: string; generation: number; roomOwner: RoomOwnerProof }): Promise<BudgetLease>;
+  renewLease(input: { leaseId: string; roomId: string; roomEpoch: string; participantId: string; admissionId: string; generation: number; roomOwner: RoomOwnerProof }): Promise<BudgetLease>;
   /** Must accept usage reserved under an old lease ID after renewLease grants a new ID. */
   reportUsage(event: UsageEvent): Promise<void>;
 }
@@ -172,6 +196,7 @@ interface Connection {
   admission: Admission;
   generation: number;
   admissionId: string;
+  roomOwner: RoomOwnerState;
   provider?: TranslationSession;
   providerToken: number;
   lease?: LeaseState;
@@ -183,11 +208,20 @@ interface Connection {
   dropIncoming: boolean;
 }
 
+interface RoomOwnerState extends RoomOwnerLease {
+  roomId: string;
+  roomEpoch: string;
+  generationByParticipant: Map<string, number>;
+  renewInFlight: boolean;
+  lost: boolean;
+}
+
 export class RelayOrchestrator {
   private readonly rooms = new Map<string, RoomActor>();
   private readonly connections = new Map<string, Connection>();
   private readonly tombstones = new Map<string, number>();
   private readonly authorityStateByRoom = new Map<string, AuthorityRoomState>();
+  private readonly roomOwners = new Map<string, RoomOwnerState>();
   private readonly lastPresenceSyncAtByRoom = new Map<string, number>();
   private readonly presenceInFlightByRoom = new Map<string, Promise<void>>();
   private readonly serial = new SerialDispatcher();
@@ -239,8 +273,41 @@ export class RelayOrchestrator {
       return await this.serial.run(roomKey, async () => {
         this.pruneRooms(this.clock.now());
         if (this.tombstones.has(roomKey)) throw new Error("ROOM_ENDED");
-        const authorityAdmission = await this.bounded(this.authority.admit(claims), "AUTHORITY_TIMEOUT");
+        let roomOwner = this.roomOwners.get(roomKey);
+        let generationByParticipant = roomOwner?.generationByParticipant;
+        if (roomOwner && (roomOwner.lost || (roomOwner.fencingToken > 0 && !this.roomOwnerIsCurrent(roomOwner)))) {
+          this.markRoomOwnerLost(roomOwner);
+          await this.stopLostRoomOwner(roomKey, roomOwner);
+          roomOwner = undefined;
+        }
+        if (!roomOwner) {
+          roomOwner = {
+            leaseId: crypto.randomUUID(),
+            roomId: claims.roomId,
+            roomEpoch: claims.roomEpoch,
+            generationByParticipant: generationByParticipant ?? new Map(),
+            fencingToken: 0,
+            expiresAtMs: 0,
+            renewInFlight: false,
+            lost: false,
+          };
+          this.roomOwners.set(roomKey, roomOwner);
+        }
+        const authorityAdmission = await this.bounded(
+          this.authority.admit(claims, {
+            leaseId: roomOwner.leaseId,
+            ...(roomOwner.fencingToken > 0 ? { fencingToken: roomOwner.fencingToken } : {}),
+          }),
+          "AUTHORITY_TIMEOUT",
+        );
+        if (authorityAdmission.status === "busy") {
+          peer.close(1013, "room-owner-busy");
+          return undefined;
+        }
         this.assertAdmission(authorityAdmission, claims);
+        this.assertRoomOwnerLease(authorityAdmission.roomOwner, roomOwner.leaseId, this.clock.now());
+        roomOwner.fencingToken = authorityAdmission.roomOwner.fencingToken;
+        roomOwner.expiresAtMs = authorityAdmission.roomOwner.expiresAtMs;
         if (authorityAdmission.roomState === "ended") {
           this.markTombstone(roomKey, this.clock.now());
           throw new Error("ROOM_ENDED");
@@ -269,7 +336,8 @@ export class RelayOrchestrator {
           targetLanguage: authorityAdmission.targetLanguage,
           admissionId: authorityAdmission.admissionId,
         };
-        const result = room.admit(admission, this.clock.now());
+        const generationFloor = (roomOwner.generationByParticipant.get(claims.participantId) ?? 0) + 1;
+        const result = room.admit(admission, this.clock.now(), generationFloor);
         if (!result.ok) {
           if (result.code === "ROOM_ENDED") {
             this.markTombstone(roomKey, this.clock.now());
@@ -282,6 +350,7 @@ export class RelayOrchestrator {
           peer.close(1008, result.code);
           return undefined;
         }
+        roomOwner.generationByParticipant.set(claims.participantId, result.generation);
         const connectionKey = this.connectionKey(roomKey, claims.participantId);
         const old = this.connections.get(connectionKey);
         if (old) {
@@ -294,6 +363,7 @@ export class RelayOrchestrator {
           admission,
           generation: result.generation,
           admissionId: authorityAdmission.admissionId,
+          roomOwner,
           providerToken: 0,
           leaseLedger: new Map(),
           blocked: false,
@@ -360,7 +430,7 @@ export class RelayOrchestrator {
       });
     }
     const connection = this.getConnection(roomId, roomEpoch, participantId, generation);
-    if (!connection || connection.dropIncoming) return Promise.resolve();
+    if (!connection || connection.dropIncoming || !this.connectionIsCurrent(connection)) return Promise.resolve();
     if (parsed.type === "client.ack") {
       if (!connection.peer.acknowledge(parsed.deliveryId)) {
         this.beginDroppingIncoming(connection, "invalid-delivery-ack");
@@ -373,7 +443,7 @@ export class RelayOrchestrator {
     }
     const receivedAtMs = this.clock.now();
     return this.enqueueClientOperation(connection, roomKey, async () => {
-      if (this.getConnection(roomId, roomEpoch, participantId, generation) !== connection) return;
+      if (this.getConnection(roomId, roomEpoch, participantId, generation) !== connection || !this.connectionIsCurrent(connection)) return;
       await this.handleClientEvent(connection, parsed, receivedAtMs);
     });
   }
@@ -421,6 +491,7 @@ export class RelayOrchestrator {
     this.rooms.clear();
     this.tombstones.clear();
     this.authorityStateByRoom.clear();
+    this.roomOwners.clear();
     this.lastPresenceSyncAtByRoom.clear();
     this.presenceInFlightByRoom.clear();
   }
@@ -430,6 +501,7 @@ export class RelayOrchestrator {
     event: ClientEvent,
     receivedAtMs = this.clock.now(),
   ): Promise<void> {
+    if (!this.connectionIsCurrent(connection)) return;
     const nowMs = this.clock.now();
     const { participantId, roomId, roomEpoch } = connection.admission;
     switch (event.type) {
@@ -538,13 +610,14 @@ export class RelayOrchestrator {
         generation: connection.generation,
         action,
         cause: "host",
+        roomOwner: this.ownerProof(connection.roomOwner),
       }), "AUTHORITY_TIMEOUT");
       this.assertControlResponse(response, connection.admission.roomEpoch, action);
     } catch {
       await this.failClosedForAuthority(connection.room);
       return;
     }
-    if (connection.dropIncoming) return;
+    if (!this.connectionIsCurrent(connection)) return;
     if (!connection.room.applyControl(
       connection.admission.participantId,
       connection.generation,
@@ -594,6 +667,7 @@ export class RelayOrchestrator {
         participantId: connection.admission.participantId,
         admissionId: connection.admissionId,
         generation: connection.generation,
+        roomOwner: this.ownerProof(connection.roomOwner),
       }), "AUTHORITY_TIMEOUT");
       this.assertLease(lease, this.clock.now());
       if (
@@ -601,6 +675,7 @@ export class RelayOrchestrator {
         || !connection.room.canCapture(connection.admission.participantId, connection.generation)
         || connection.blocked
         || connection.dropIncoming
+        || !this.connectionIsCurrent(connection)
       ) {
         return;
       }
@@ -739,6 +814,15 @@ export class RelayOrchestrator {
     const room = this.rooms.get(roomKey);
     if (!room) return;
     const nowMs = this.clock.now();
+    const roomOwner = this.roomOwners.get(roomKey);
+    if (!roomOwner || !this.roomOwnerIsCurrent(roomOwner)) {
+      if (roomOwner) this.markRoomOwnerLost(roomOwner);
+      await this.stopLostRoomOwner(roomKey, roomOwner);
+      return;
+    }
+    if (roomOwner.expiresAtMs - nowMs <= ROOM_OWNER_RENEW_WINDOW_MS) {
+      this.startRenewRoomOwnership(roomKey, roomOwner);
+    }
     room.tick(nowMs);
     for (const connection of this.connectionsForRoom(room)) {
       if (nowMs - connection.lastPingAtMs >= CLIENT_PING_TIMEOUT_MS) {
@@ -801,6 +885,7 @@ export class RelayOrchestrator {
         generation: host.generation,
         action: desired === "ended" ? "end" : "pause",
         cause: "lifecycle",
+        roomOwner: this.ownerProof(hostConnection.roomOwner),
       }), "AUTHORITY_TIMEOUT");
       this.assertControlResponse(
         response,
@@ -834,12 +919,14 @@ export class RelayOrchestrator {
         roomId: room.roomId,
         roomEpoch: room.roomEpoch,
         participants,
+        roomOwner: this.ownerProofForRoom(roomKey),
       }), "AUTHORITY_TIMEOUT");
       this.assertPresenceResponse(response, room.roomEpoch);
     } catch {
       await this.failClosedForAuthority(room);
       return false;
     }
+    if (!this.roomOwnerIsCurrent(this.roomOwners.get(roomKey))) return false;
     await this.applyPresenceResponse(roomKey, room, response);
     return true;
   }
@@ -851,6 +938,7 @@ export class RelayOrchestrator {
       roomId: room.roomId,
       roomEpoch: room.roomEpoch,
       participants,
+      roomOwner: this.ownerProofForRoom(roomKey),
     }), "AUTHORITY_TIMEOUT");
     this.lastPresenceSyncAtByRoom.set(roomKey, this.clock.now());
     let completion!: Promise<void>;
@@ -861,6 +949,7 @@ export class RelayOrchestrator {
         if (
           this.disposed
           || this.rooms.get(roomKey) !== room
+          || !this.roomOwnerIsCurrent(this.roomOwners.get(roomKey)!)
           || !this.samePresenceParticipants(participants, this.presenceParticipants(room))
         ) {
           return;
@@ -1008,6 +1097,7 @@ export class RelayOrchestrator {
       participantId: connection.admission.participantId,
       admissionId: connection.admissionId,
       generation: connection.generation,
+      roomOwner: this.ownerProof(connection.roomOwner),
     }), "AUTHORITY_TIMEOUT");
     void operation.then(
       next => this.serial.run(roomKey, async () => {
@@ -1170,10 +1260,11 @@ export class RelayOrchestrator {
     }));
   }
 
-  private assertAdmission(admission: AuthorityAdmission, claims: TicketClaims): void {
+  private assertAdmission(admission: Extract<AuthorityAdmission, { status: "admitted" }>, claims: TicketClaims): void {
     if (
       !admission
       || typeof admission !== "object"
+      || admission.status !== "admitted"
       || typeof admission.admissionId !== "string"
       || admission.admissionId.length < 1
       || admission.admissionId.length > 128
@@ -1312,12 +1403,104 @@ export class RelayOrchestrator {
   }
 
   private connectionIsCurrent(connection: Connection): boolean {
+    if (!this.roomOwnerIsCurrent(connection.roomOwner)) {
+      this.markRoomOwnerLost(connection.roomOwner);
+      const roomKey = this.roomKey(connection.admission.roomId, connection.admission.roomEpoch);
+      void this.serial.run(roomKey, () => this.stopLostRoomOwner(roomKey, connection.roomOwner));
+      return false;
+    }
     return !connection.dropIncoming
+      && this.roomOwners.get(this.roomKey(connection.admission.roomId, connection.admission.roomEpoch)) === connection.roomOwner
       && connection.room.isCurrent(connection.admission.participantId, connection.generation)
       && this.connections.get(this.connectionKey(
         this.roomKey(connection.admission.roomId, connection.admission.roomEpoch),
         connection.admission.participantId,
       )) === connection;
+  }
+
+  private roomOwnerIsCurrent(owner: RoomOwnerState | undefined): owner is RoomOwnerState {
+    return !!owner
+      && !owner.lost
+      && owner.fencingToken > 0
+      && owner.expiresAtMs - this.clock.now() > ROOM_OWNER_EXPIRY_SAFETY_MS;
+  }
+
+  private ownerProof(owner: RoomOwnerState): RoomOwnerProof {
+    return { leaseId: owner.leaseId, fencingToken: owner.fencingToken };
+  }
+
+  private ownerProofForRoom(roomKey: string): RoomOwnerProof {
+    const owner = this.roomOwners.get(roomKey);
+    if (!owner || !this.roomOwnerIsCurrent(owner)) throw new Error("ROOM_OWNER_LOST");
+    return this.ownerProof(owner);
+  }
+
+  private assertRoomOwnerLease(value: RoomOwnerLease, expectedLeaseId: string, nowMs: number): void {
+    if (
+      !value
+      || value.leaseId !== expectedLeaseId
+      || value.leaseId.length < 1
+      || value.leaseId.length > 128
+      || /[\u0000-\u001f]/u.test(value.leaseId)
+      || !Number.isSafeInteger(value.fencingToken)
+      || value.fencingToken < 1
+      || !Number.isSafeInteger(value.expiresAtMs)
+      || value.expiresAtMs <= nowMs
+      || value.expiresAtMs > nowMs + ROOM_OWNER_LEASE_MS
+    ) throw new Error("INVALID_ROOM_OWNER_LEASE");
+  }
+
+  private startRenewRoomOwnership(roomKey: string, owner: RoomOwnerState): void {
+    if (owner.renewInFlight || !this.roomOwnerIsCurrent(owner)) return;
+    owner.renewInFlight = true;
+    const oldExpiry = owner.expiresAtMs;
+    const operation = this.bounded(this.authority.renewRoomOwnership({
+      roomId: owner.roomId,
+      roomEpoch: owner.roomEpoch,
+      roomOwner: this.ownerProof(owner),
+    }), "AUTHORITY_TIMEOUT");
+    void operation.then(value => {
+      owner.renewInFlight = false;
+      const nowMs = this.clock.now();
+      try {
+        if (owner.lost || nowMs >= oldExpiry) throw new Error("ROOM_OWNER_EXPIRED");
+        this.assertRoomOwnerLease(value, owner.leaseId, nowMs);
+        if (value.fencingToken !== owner.fencingToken) throw new Error("ROOM_OWNER_FENCED");
+        owner.expiresAtMs = value.expiresAtMs;
+      } catch {
+        this.markRoomOwnerLost(owner);
+        void this.serial.run(roomKey, () => this.stopLostRoomOwner(roomKey, owner));
+      }
+    }, () => {
+      owner.renewInFlight = false;
+      this.markRoomOwnerLost(owner);
+      void this.serial.run(roomKey, () => this.stopLostRoomOwner(roomKey, owner));
+    });
+  }
+
+  private markRoomOwnerLost(owner: RoomOwnerState): void {
+    if (owner.lost) return;
+    owner.lost = true;
+    for (const connection of this.connections.values()) {
+      if (connection.roomOwner !== owner) continue;
+      connection.dropIncoming = true;
+      connection.providerToken += 1;
+      connection.peer.close(1013, "room-owner-lost");
+    }
+  }
+
+  private async stopLostRoomOwner(roomKey: string, owner: RoomOwnerState | undefined): Promise<void> {
+    const room = this.rooms.get(roomKey);
+    if (!room) return;
+    if (owner && this.roomOwners.get(roomKey) !== owner) return;
+    for (const connection of this.connectionsForRoom(room)) {
+      await this.disconnect(connection, 1013, "room-owner-lost", false, false);
+    }
+    room.terminate();
+    if (this.rooms.get(roomKey) === room) this.rooms.delete(roomKey);
+    this.lastPresenceSyncAtByRoom.delete(roomKey);
+    this.presenceInFlightByRoom.delete(roomKey);
+    this.authorityStateByRoom.delete(roomKey);
   }
 
   private sendRoomState(connection: Connection): void {

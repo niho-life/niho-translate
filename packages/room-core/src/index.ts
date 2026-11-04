@@ -96,7 +96,10 @@ export class RoomActor {
     }
   }
 
-  admit(admission: Admission, nowMs: number): AdmitResult {
+  admit(admission: Admission, nowMs: number, generationFloor = 1): AdmitResult {
+    if (!Number.isSafeInteger(generationFloor) || generationFloor < 1) {
+      throw new Error("INVALID_GENERATION_FLOOR");
+    }
     this.tick(nowMs);
     if (this.ended) return { ok: false, code: "ROOM_ENDED" };
     if (admission.roomId !== this.roomId || admission.roomEpoch !== this.roomEpoch) {
@@ -116,7 +119,7 @@ export class RoomActor {
       }
       const replacedGeneration = existing.connected ? existing.generation : undefined;
       this.releaseSpeaker(existing.participantId, existing.generation);
-      existing.generation += 1;
+      existing.generation = Math.max(existing.generation + 1, generationFloor);
       existing.connected = true;
       existing.state = "connecting";
       delete existing.reservedUntilMs;
@@ -142,11 +145,11 @@ export class RoomActor {
       role: admission.role,
       sourceLanguage: admission.sourceLanguage,
       targetLanguage: admission.targetLanguage,
-      generation: 1,
+      generation: generationFloor,
       state: "connecting",
       connected: true,
     });
-    return { ok: true, generation: 1 };
+    return { ok: true, generation: generationFloor };
   }
 
   markReady(participantId: string, generation: number): boolean {

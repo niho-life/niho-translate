@@ -27,12 +27,17 @@ relayはissuer、audience、`exp/nbf/jti/roomId/participantId/roomEpoch`、confi
 
 すべて `POST`、`Authorization: Bearer <RELAY_SERVICE_TOKEN>`、JSON、5秒以内、redirectなしです。固定 `AUTHORITY_URL` と同じoriginだけを使います。responseはstream読込中から16 KiB上限を強制します。
 
-- `admit`: ticket claimsを受け、`{admissionId,role,sourceLanguage,targetLanguage,roomEpoch,roomState}` を返します。`admissionId` は1〜128文字のopaqueなcurrent connection grantです。role/language/room stateはAuthorityだけが決定し、jti consumeとgrant更新を同じ原子操作にします。
-- `rooms/presence`: `{roomId,roomEpoch,participants:[{participantId,admissionId,generation,ready}]}` を受け、`{roomEpoch,state,allowedAdmissionIds}` を返します。接続、admission、ready、切断、および5秒ごとに呼ばれます。Authorityはcurrent grantを照合し、未許可grantを返しません。
-- `rooms/control`: `{roomId,roomEpoch,participantId,admissionId,generation,action,cause}` を受け、`{roomEpoch,state}` を返します。actionは `start|pause|resume|end`、causeは `host|lifecycle` です。current grantとgenerationを再検証し、状態遷移を原子的に保存します。
-- `leases/acquire`: `{roomId,roomEpoch,participantId,admissionId,generation}` を受け、`{leaseId,expiresAtMs,maxInputAudioMs}` を返します。
-- `leases/renew`: acquireの値と `leaseId` を受け、同じshapeを返します。
+- `admit`: ticket claimsと `{roomOwner:{leaseId,fencingToken?}}` を受けます。成功時は `{status:"admitted",admissionId,role,sourceLanguage,targetLanguage,roomEpoch,roomState,roomOwner:{leaseId,fencingToken,expiresAtMs}}`、別ownerが有効なら `{status:"busy",retryAfterMs}` を返します。busy判定はjti消費より先に行い、競合側ticketを未使用のまま保ちます。role/language/room stateとfencing tokenはAuthorityだけが決定し、jti consumeとgrant更新を同じ原子操作にします。
+- `rooms/owner/renew`: `{roomId,roomEpoch,roomOwner:{leaseId,fencingToken}}` を受け、同じlease ID/fenceと延長後の`expiresAtMs`を返します。owner leaseは10秒、relayは期限5秒前からrenewし、期限1秒前をローカル停止境界にします。拒否・timeout・期限切れ・fence不一致時は、そのprocessが直ちに入力、provider送信、音声/字幕配信を止め、遅着callbackを破棄します。
+- `rooms/presence`: `{roomId,roomEpoch,roomOwner,participants:[{participantId,admissionId,generation,ready}]}` を受け、`{roomEpoch,state,allowedAdmissionIds}` を返します。接続、admission、ready、切断、および5秒ごとに呼ばれます。Authorityはcurrent owner・grantを照合し、未許可grantを返しません。
+- `rooms/control`: `{roomId,roomEpoch,roomOwner,participantId,admissionId,generation,action,cause}` を受け、`{roomEpoch,state}` を返します。actionは `start|pause|resume|end`、causeは `host|lifecycle` です。current owner、grant、generationを再検証し、状態遷移を原子的に保存します。
+- `leases/acquire`: `{roomId,roomEpoch,roomOwner,participantId,admissionId,generation}` を受け、`{leaseId,expiresAtMs,maxInputAudioMs}` を返します。発行したbudget leaseにowner fenceを束縛します。
+- `leases/renew`: acquireの値、`roomOwner`、`leaseId` を受け、同じshapeを返します。
 - `usage`: `{roomId,roomEpoch,participantId,admissionId,generation,leaseId,inputAudioSeconds,atMs}`。音声・字幕本文を含めません。
+
+同じ`roomId + roomEpoch`のowner leaseとmonotonic fencing tokenはAuthorityのdurable room rowに保存します。失効ownerを置き換える前に、そのroomの未失効budget leaseがすべて期限切れであることを確認します。これにより旧revisionも最大15秒の既存budget leaseを使い切るまで新ownerを妨げず、以後はowner proof欠落としてAuthority操作を拒否されます。usageは既に予約済みの旧budget leaseへ期限内に集計できるよう、owner失効後もそのlease IDとgenerationでのみ受け付けます。
+
+別processへ届いたhost/guestの接続は、非owner側で1013 `room-owner-busy` を返し、ticketを消費しません。接続側は同じticketで再試行できます。複数processへ配備する場合は、room ownerへのroom affinity/routingが必要です。Authority lockはsingle-writerの重複稼働を防ぎますが、processをまたいで同一provider actorやsocketを共有する仕組みではありません。
 
 Authorityは自分のserver clockで `hostLastSeen` と `lastAnySeen` をdurable保持し、host不在30秒でpaused、120秒でended、作成後90分でendedを返します。client時刻やsocket closeの到着を正本にしません。pausedからの復帰にはcurrent hostの明示 `room.resume` が必要で、endedは復帰不可です。service bearerだけを根拠に任意participantの旧grant/generation操作を通してはいけません。
 
@@ -69,6 +74,6 @@ App Clipは[Appleの制約](https://developer.apple.com/documentation/appclip/ch
 
 ## v1の実通訳relay
 
-送信バッファを観測でき、native ping/pongを使う `examples/relay-local` のreal modeを選びます。名前はlocalですが、実API・JWT・外部Authorityの経路を持ちます。既定は`HOST=127.0.0.1`です。loopbackの前にTLS終端proxyを置くか、TLSを終端するコンテナ基盤で`HOST=0.0.0.0`と基盤の`PORT`を明示し、単一processへroutingしてください。`HOST`はこの2値以外を拒否します。複数processへそのまま増やしてはいけません。ホストの接続先と配備設定の反映は別途必要です。
+送信バッファを観測でき、native ping/pongを使う `examples/relay-local` のreal modeを選びます。名前はlocalですが、実API・JWT・外部Authorityの経路を持ちます。既定は`HOST=127.0.0.1`です。loopbackの前にTLS終端proxyを置くか、TLSを終端するコンテナ基盤で`HOST=0.0.0.0`と基盤の`PORT`を明示します。Authority fencingは複数processで同じroomのprovider actorが重複稼働することを防ぎます。host/guestを同じowner processへ届けるroom affinity/routingは別途必要です。非owner接続はticket未消費で1013となるため、clientまたはroutingが再試行します。ホストの接続先と配備設定の反映は別途必要です。
 
 現在の `examples/relay-cloudflare` は送信バッファを観測できず、provider設定前に停止します。周期 `session.update` による代替のhealth checkは意味欠落を再現したため廃止しました。未観測値を0にしたり、無音中に返らない翻訳を配送ACK扱いしたりして有効化しないでください。

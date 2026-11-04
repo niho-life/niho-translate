@@ -111,11 +111,26 @@ interface TestAuthority extends Authority {
   generations: Map<string, number>;
   revoked: Set<string>;
   failSync: boolean;
+  ownerLeaseId?: string;
+  ownerFence: number;
+  ownerExpiresAtMs: number;
+  roomOwnerProof: { leaseId: string; fencingToken: number };
 }
 
-function authority(): TestAuthority {
+function authority(now?: () => number): TestAuthority {
+  const clockAware = now !== undefined;
+  const authorityNow = now ?? (() => 0);
   let nextAdmission = 0;
   const consumedJtis = new Set<string>();
+  let ownerLeaseId: string | undefined;
+  let ownerFence = 0;
+  let ownerExpiresAtMs = clockAware ? authorityNow() + 10_000 : 11_000;
+  let activeBudgetExpiresAtMs = 0;
+  const assertOwner = (input: { roomOwner?: { leaseId: string; fencingToken: number } }) => {
+    if (!input.roomOwner || input.roomOwner.leaseId !== ownerLeaseId || input.roomOwner.fencingToken !== ownerFence) {
+      throw new Error("STALE_ROOM_OWNER");
+    }
+  };
   return {
     roomState: "waiting",
     usage: [],
@@ -123,22 +138,45 @@ function authority(): TestAuthority {
     generations: new Map(),
     revoked: new Set(),
     failSync: false,
-    async admit(claims) {
+    get ownerFence() { return ownerFence; },
+    get ownerExpiresAtMs() { return ownerExpiresAtMs; },
+    get roomOwnerProof() { return { leaseId: ownerLeaseId!, fencingToken: ownerFence }; },
+    async admit(claims, candidate) {
+      if (ownerLeaseId && ownerLeaseId !== candidate.leaseId && clockAware
+        && Math.max(ownerExpiresAtMs, activeBudgetExpiresAtMs) > authorityNow()) {
+        return { status: "busy", retryAfterMs: Math.max(1, Math.max(ownerExpiresAtMs, activeBudgetExpiresAtMs) - authorityNow()) };
+      }
+      if (!ownerLeaseId || (ownerLeaseId !== candidate.leaseId && clockAware)) {
+        ownerLeaseId = candidate.leaseId;
+        ownerFence += 1;
+        ownerExpiresAtMs = clockAware ? authorityNow() + 10_000 : 11_000;
+      } else if (candidate.fencingToken !== undefined && candidate.fencingToken !== ownerFence) {
+        throw new Error("STALE_ROOM_OWNER");
+      }
       if (consumedJtis.has(claims.jti)) throw new Error("TICKET_REPLAY");
       consumedJtis.add(claims.jti);
       const isHost = claims.participantId === "host-ja";
       const admissionId = `${claims.participantId}-grant-${++nextAdmission}`;
       this.grants.set(claims.participantId, admissionId);
       return {
+        status: "admitted",
         admissionId,
         role: isHost ? "host" : "guest",
         sourceLanguage: isHost ? "ja" : "en",
         targetLanguage: isHost ? "en" : "ja",
         roomEpoch: "e",
         roomState: this.roomState,
+        roomOwner: { leaseId: ownerLeaseId, fencingToken: ownerFence, expiresAtMs: ownerExpiresAtMs },
       };
     },
+    async renewRoomOwnership(input) {
+      assertOwner(input);
+      if (ownerExpiresAtMs <= authorityNow()) throw new Error("ROOM_OWNER_EXPIRED");
+      ownerExpiresAtMs = clockAware ? authorityNow() + 10_000 : ownerExpiresAtMs + 5_000;
+      return { leaseId: ownerLeaseId!, fencingToken: ownerFence, expiresAtMs: ownerExpiresAtMs };
+    },
     async syncPresence(input) {
+      assertOwner(input);
       if (this.failSync) throw new Error("SYNC_FAILED");
       const allowed = input.participants.filter(participant => (
         this.grants.get(participant.participantId) === participant.admissionId
@@ -154,6 +192,7 @@ function authority(): TestAuthority {
       };
     },
     async controlRoom(context) {
+      assertOwner(context);
       if (
         this.grants.get(context.participantId) !== context.admissionId
         || this.generations.get(context.participantId) !== context.generation
@@ -166,18 +205,22 @@ function authority(): TestAuthority {
       return { roomEpoch: "e", state: this.roomState };
     },
     async acquireLease(input) {
+      assertOwner(input);
       if (
         this.grants.get(input.participantId) !== input.admissionId
         || this.generations.get(input.participantId) !== input.generation
       ) throw new Error("STALE_ADMISSION");
-      return { leaseId: "lease-1", expiresAtMs: 15_000, maxInputAudioMs: 15_000 };
+      activeBudgetExpiresAtMs = Math.max(activeBudgetExpiresAtMs, authorityNow() + 15_000);
+      return { leaseId: "lease-1", expiresAtMs: authorityNow() + 15_000, maxInputAudioMs: 15_000 };
     },
     async renewLease(input) {
+      assertOwner(input);
       if (
         this.grants.get(input.participantId) !== input.admissionId
         || this.generations.get(input.participantId) !== input.generation
       ) throw new Error("STALE_ADMISSION");
-      return { leaseId: "lease-2", expiresAtMs: 25_000, maxInputAudioMs: 15_000 };
+      activeBudgetExpiresAtMs = Math.max(activeBudgetExpiresAtMs, authorityNow() + 15_000);
+      return { leaseId: "lease-2", expiresAtMs: authorityNow() + 15_000, maxInputAudioMs: 15_000 };
     },
     async reportUsage(event) {
       if (
@@ -443,6 +486,9 @@ describe("relay orchestration", () => {
     expect(report).toHaveBeenCalledTimes(1);
     expect(report.mock.calls[0]![0]).toMatchObject({ leaseId: "lease-1", inputAudioSeconds: 1 });
 
+    clock.time = 6_000;
+    await relay.tick();
+    await flushAsync();
     clock.time = 11_000;
     const ticking = relay.tick();
     for (let index = 0; index < 10 && !resolveRenew; index += 1) await Promise.resolve();
@@ -693,6 +739,7 @@ describe("relay orchestration", () => {
     presenceGate.resolve(await originalSync({
       roomId: "r",
       roomEpoch: "e",
+      roomOwner: testAuthority.roomOwnerProof,
       participants: [
         { participantId: "host-ja", admissionId: testAuthority.grants.get("host-ja")!, generation: host.generation, ready: true },
         { participantId: "guest-en", admissionId: testAuthority.grants.get("guest-en")!, generation: guest.generation, ready: true },
@@ -750,6 +797,9 @@ describe("relay orchestration", () => {
         v: 1, type: "audio.append", audio, atMs: 0,
       }));
     }
+    clock.time = 6_000;
+    await relay.tick();
+    await flushAsync();
     clock.time = 11_000;
     await relay.tick();
     await flushAsync();
@@ -811,6 +861,10 @@ describe("relay orchestration", () => {
       await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
         v: 1, type: "audio.append", audio, atMs: clock.now(),
       }));
+      if (clock.now() === 6_000) {
+        await relay.tick();
+        await flushAsync();
+      }
       const current = usage.at(-1);
       if (
         current
@@ -882,6 +936,9 @@ describe("relay orchestration", () => {
         v: 1, type: "audio.append", audio, atMs: clock.now(),
       }));
     }
+    clock.time = 6_000;
+    await relay.tick();
+    await flushAsync();
     clock.time = 10_000;
     await relay.tick();
     renewGate.resolve({ leaseId: "lease-2", expiresAtMs: 25_000, maxInputAudioMs: 15_000 });
@@ -901,11 +958,18 @@ describe("relay orchestration", () => {
   it("drops provider audio and captions at the lease expiry boundary before tick", async () => {
     const clock = new Clock();
     const factory = new Factory();
-    const relay = new RelayOrchestrator(verifier, authority(), factory, clock);
+    const testAuthority = authority();
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
     const connected = await readyAndStart(relay);
     const host = connected.get("host-ja")!;
     const guest = connected.get("guest-en")!;
     const audio = Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64");
+    clock.time = 6_000;
+    await relay.tick();
+    await flushAsync();
+    clock.time = 11_000;
+    await relay.tick();
+    await flushAsync();
     await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
       v: 1, type: "audio.append", audio, atMs: clock.now(),
     }));
@@ -960,6 +1024,9 @@ describe("relay orchestration", () => {
 
     testAuthority.reportUsage = async () => {};
     testAuthority.renewLease = () => renewGate.promise;
+    clock.time = 6_000;
+    await relay.tick();
+    await flushAsync();
     clock.time = 11_000;
     await relay.tick();
     await flushAsync();
@@ -1067,17 +1134,21 @@ describe("relay orchestration", () => {
     const host = connected.get("host-ja")!;
     await relay.peerClosed("r", "e", "host-ja", host.generation);
 
-    clock.time = 31_000;
-    await relay.receive("r", "e", "guest-en", guest.generation, JSON.stringify({ v: 1, type: "client.ping" }));
-    await relay.tick();
-    await flushAsync();
+    for (let now = 6_000; now <= 31_000; now += 5_000) {
+      clock.time = now;
+      await relay.receive("r", "e", "guest-en", guest.generation, JSON.stringify({ v: 1, type: "client.ping" }));
+      await relay.tick();
+      await flushAsync();
+    }
     expect(factory.sessions[0]!.closed).toBe(true);
     expect(guest.peer.events.filter(event => event.type === "room.state").at(-1)).toMatchObject({ paused: true });
 
-    clock.time = 121_000;
-    await relay.receive("r", "e", "guest-en", guest.generation, JSON.stringify({ v: 1, type: "client.ping" }));
-    await relay.tick();
-    await flushAsync();
+    for (let now = 36_000; now <= 121_000; now += 5_000) {
+      clock.time = now;
+      await relay.receive("r", "e", "guest-en", guest.generation, JSON.stringify({ v: 1, type: "client.ping" }));
+      await relay.tick();
+      await flushAsync();
+    }
     expect(guest.peer.closed).toEqual([1000, "room-ended"]);
     await relay.dispose();
   });
@@ -1133,13 +1204,16 @@ describe("relay orchestration", () => {
     await relay.dispose();
   });
 
-  it("disconnects at the 15-second ping deadline even when presence sync consumes five seconds", async () => {
+  it("fails closed when presence sync consumes the room-owner renewal deadline", async () => {
     const clock = new Clock();
     const testAuthority = authority();
     const originalSync = testAuthority.syncPresence.bind(testAuthority);
     const relay = new RelayOrchestrator(verifier, testAuthority, new Factory(), clock);
     const hostPeer = new Peer();
     const host = await relay.connect("Bearer host-ja", hostPeer);
+    clock.time = 6_000;
+    await relay.tick();
+    await flushAsync();
     testAuthority.syncPresence = async input => {
       clock.time += 5_000;
       return originalSync(input);
@@ -1147,7 +1221,7 @@ describe("relay orchestration", () => {
     clock.time = 11_000;
     await relay.tick();
     await flushAsync();
-    expect(hostPeer.closed).toEqual([4008, "client-ping-timeout"]);
+    expect(hostPeer.closed).toEqual([1013, "room-owner-lost"]);
     expect(host).toBeDefined();
     await relay.dispose();
   });
@@ -1171,28 +1245,78 @@ describe("relay orchestration", () => {
     await relay.dispose();
   });
 
-  it("rejects an old admission grant even when a restarted relay reuses generation one", async () => {
+  it("holds a split-process contender until both owner and old budget lease expire, then advances the fence", async () => {
     const clock = new Clock();
-    const testAuthority = authority();
+    const testAuthority = authority(() => clock.now());
     const firstRelay = new RelayOrchestrator(verifier, testAuthority, new Factory(), clock);
-    const firstPeer = new Peer();
-    const first = await firstRelay.connect("Bearer host-ja", firstPeer);
-    await firstRelay.receive("r", "e", "host-ja", first!.generation, JSON.stringify({ v: 1, type: "client.ready" }));
+    const firstConnections = await readyAndStart(firstRelay);
+    const host = firstConnections.get("host-ja")!;
+    await firstRelay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "speech.start", atMs: clock.now() }));
+    const previousFence = testAuthority.ownerFence;
+    await firstRelay.dispose();
 
     const restartedRelay = new RelayOrchestrator(verifier, testAuthority, new Factory(), clock);
     const restartedPeer = new Peer();
-    const restarted = await restartedRelay.connect("Bearer host-ja#after-restart", restartedPeer);
+    clock.time = 12_000; // 10秒owner leaseは失効したが、取得済みbudget leaseはまだ有効。
+    const busy = await restartedRelay.connect("Bearer guest-en#after-restart", restartedPeer);
+    expect(busy).toBeUndefined();
+    expect(restartedPeer.closed).toEqual([1013, "room-owner-busy"]);
+    clock.time = 16_000; // 旧15秒budget leaseの期限も過ぎた。
+    const retryPeer = new Peer();
+    const restarted = await restartedRelay.connect("Bearer guest-en#after-restart", retryPeer);
     expect(restarted!.generation).toBe(1);
-    await restartedRelay.receive("r", "e", "host-ja", restarted!.generation, JSON.stringify({ v: 1, type: "client.ready" }));
-
-    await firstRelay.receive("r", "e", "host-ja", first!.generation, JSON.stringify({ v: 1, type: "room.start" }));
-    expect(firstPeer.events.some(event => event.type === "error" && event.code === "INTERNAL")).toBe(true);
-    expect(firstPeer.events.filter(event => event.type === "route").at(-1)).toMatchObject({
-      canCapture: false,
-      reason: "blocked",
-    });
-    await firstRelay.dispose();
+    expect(testAuthority.ownerFence).toBe(previousFence + 1);
+    await restartedRelay.receive("r", "e", "guest-en", restarted!.generation, JSON.stringify({ v: 1, type: "client.ready" }));
     await restartedRelay.dispose();
+  });
+
+  it("stops sends on owner expiry and drops a provider callback that arrives afterward", async () => {
+    const clock = new Clock();
+    const testAuthority = authority(() => clock.now());
+    const factory = new Factory();
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connections = await readyAndStart(relay);
+    const host = connections.get("host-ja")!;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "speech.start", atMs: clock.now() }));
+    const session = factory.sessions[0]!;
+    const appendsBeforeExpiry = session.appends.length;
+    clock.time = testAuthority.ownerExpiresAtMs;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({
+      v: 1,
+      type: "audio.append",
+      atMs: clock.now(),
+      audio: Buffer.alloc(AUDIO_BATCH_BYTES).toString("base64"),
+    }));
+    session.sink.onOutputAudio(Buffer.alloc(2).toString("base64"));
+    await flushAsync();
+    expect(session.appends).toHaveLength(appendsBeforeExpiry);
+    expect(session.closed).toBe(true);
+    expect(host.peer.closed).toEqual([1013, "room-owner-lost"]);
+    expect(host.peer.events.some(event => event.type === "audio")).toBe(false);
+    await relay.dispose();
+  });
+
+  it("fails closed on owner renewal rejection before any further provider send", async () => {
+    const clock = new Clock();
+    const testAuthority = authority(() => clock.now());
+    const factory = new Factory();
+    const relay = new RelayOrchestrator(verifier, testAuthority, factory, clock);
+    const connections = await readyAndStart(relay);
+    const host = connections.get("host-ja")!;
+    await relay.receive("r", "e", "host-ja", host.generation, JSON.stringify({ v: 1, type: "speech.start", atMs: clock.now() }));
+    const session = factory.sessions[0]!;
+    testAuthority.renewRoomOwnership = async () => { throw new Error("OWNER_RENEW_REJECTED"); };
+    clock.time = testAuthority.ownerExpiresAtMs - 5_000;
+    await relay.tick();
+    await flushAsync();
+    expect(host.peer.closed).toEqual([1013, "room-owner-lost"]);
+    expect(session.closed).toBe(true);
+    const appendsBeforeLateInput = session.appends.length;
+    session.sink.onOutputAudio(Buffer.alloc(2).toString("base64"));
+    await flushAsync();
+    expect(session.appends).toHaveLength(appendsBeforeLateInput);
+    expect(host.peer.events.some(event => event.type === "audio")).toBe(false);
+    await relay.dispose();
   });
 
   it("bounds validated receiver operations while Authority control is stalled", async () => {

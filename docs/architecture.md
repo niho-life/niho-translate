@@ -40,7 +40,7 @@ AudioEngineは観測イベントをplayback generation付きでSessionへ渡し�
 
 ## Room placement
 
-同じ `roomId + roomEpoch` は、必ず同じsingle-writer actorへrouteしてください。reference registryは単一process専用です。Cloudflare例は検証済みclaimsからDurable Object IDを導出し、DO内でもJWTとIDを再検証します。v1の2席、admit、generation、control、lease停止、provider callbackを同じ直列境界へ入れます。
+同じ `roomId + roomEpoch` は、Authorityがleaseとmonotonic fencing tokenで単一ownerを決めます。10秒leaseを残り5秒以内に更新し、relayは期限1秒前に停止境界を置きます。更新拒否・timeout・期限切れ・fence不一致時はそのprocessの入力、provider送信、音声/字幕配信、遅着callbackを直ちに無効化します。後続ownerはowner leaseと旧15秒budget leaseの両方が失効するまで取得できません。各processはlocal actorを1つ持ち、非ownerへのadmitはticket消費前に再試行可能な1013で閉じます。このleaseは二重provider処理を止めますが、socketやactorをprocess間で共有しません。配備時はhostとguestを現在のowner processへrouteする必要があります。v1の2席、admit、generation、control、lease停止、provider callbackは引き続き同じ直列境界へ入れます。
 
 ended tombstoneはroom最大寿命90分 + ticket最大TTL 60秒以上保持します。TTL後もprivate Authorityがended epochを正本として拒否する必要があります。同一epochを再作成してはいけません。新しい会話は新しいepochにします。
 

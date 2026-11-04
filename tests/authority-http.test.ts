@@ -10,12 +10,14 @@ describe("HTTP Authority adapter", () => {
       _input: Parameters<typeof globalThis.fetch>[0],
       _init?: Parameters<typeof globalThis.fetch>[1],
     ) => new Response(JSON.stringify({
+      status: "admitted",
       admissionId: "grant",
       role: "host",
       sourceLanguage: "ja",
       targetLanguage: "en",
       roomEpoch: "epoch",
       roomState: "waiting",
+      roomOwner: { leaseId: "owner", fencingToken: 1, expiresAtMs: 15_000 },
     }), { headers: { "content-type": "application/json" } }));
     const authority = new HttpAuthority({
       baseURL: "https://authority.example.invalid/v1/",
@@ -28,16 +30,36 @@ describe("HTTP Authority adapter", () => {
       participantId: "participant",
       jti: "jti",
       expiresAtMs: 10_000,
-    });
+    }, { leaseId: "owner" });
     const [url, init] = fetch.mock.calls[0]!;
     expect(String(url)).toBe("https://authority.example.invalid/v1/admit");
     expect(init).toMatchObject({ method: "POST", redirect: "error" });
     expect(new Headers(init!.headers).get("authorization")).toBe("Bearer synthetic-secret");
+    expect(JSON.parse(String(init!.body))).toMatchObject({ roomOwner: { leaseId: "owner" } });
     expect(() => new HttpAuthority({
       baseURL: "http://authority.example.invalid/",
       serviceToken: "secret",
       fetch,
     })).toThrow("INVALID_AUTHORITY_CONFIG");
+  });
+
+  it("renews room ownership through the fixed HTTPS Authority route", async () => {
+    const fetch = vi.fn(async (_input: Parameters<typeof globalThis.fetch>[0]) => new Response(JSON.stringify({
+      leaseId: "owner",
+      fencingToken: 4,
+      expiresAtMs: 20_000,
+    }), { headers: { "content-type": "application/json" } }));
+    const authority = new HttpAuthority({
+      baseURL: "https://authority.example.invalid/v1/",
+      serviceToken: "synthetic-secret",
+      fetch,
+    });
+    await authority.renewRoomOwnership({
+      roomId: "room",
+      roomEpoch: "epoch",
+      roomOwner: { leaseId: "owner", fencingToken: 4 },
+    });
+    expect(String(fetch.mock.calls[0]?.[0])).toBe("https://authority.example.invalid/v1/rooms/owner/renew");
   });
 
   it("rejects a streamed response as soon as it exceeds 16 KiB", async () => {
@@ -57,6 +79,7 @@ describe("HTTP Authority adapter", () => {
       roomId: "room",
       roomEpoch: "epoch",
       participants: [],
+      roomOwner: { leaseId: "owner", fencingToken: 1 },
     })).rejects.toThrow("AUTHORITY_RESPONSE_TOO_LARGE");
   });
 });

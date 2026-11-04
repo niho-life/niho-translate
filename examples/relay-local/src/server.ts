@@ -53,24 +53,45 @@ class MockAuthority implements Authority {
   private readonly grants = new Map<string, string>();
   private readonly generations = new Map<string, number>();
   private readonly consumedJtis = new Set<string>();
+  private ownerLeaseId: string | undefined;
+  private ownerFence = 0;
+  private ownerExpiresAtMs = Date.now() + 10_000;
 
-  async admit(claims: TicketClaims) {
+  async admit(claims: TicketClaims, candidate: Parameters<Authority["admit"]>[1]) {
+    if (this.ownerLeaseId && this.ownerLeaseId !== candidate.leaseId) {
+      return { status: "busy" as const, retryAfterMs: Math.max(1, this.ownerExpiresAtMs - Date.now()) };
+    }
+    if (!this.ownerLeaseId) {
+      this.ownerLeaseId = candidate.leaseId;
+      this.ownerFence += 1;
+    } else if (candidate.fencingToken !== undefined && candidate.fencingToken !== this.ownerFence) {
+      throw new Error("STALE_ROOM_OWNER");
+    }
     if (this.consumedJtis.has(claims.jti)) throw new Error("TICKET_REPLAY");
     this.consumedJtis.add(claims.jti);
     const sourceLanguage = claims.participantId === "guest-en" ? "en" as const : "ja" as const;
     const admissionId = `${claims.participantId}-${claims.jti}`;
     this.grants.set(claims.participantId, admissionId);
     return {
+      status: "admitted" as const,
       admissionId,
       role: claims.participantId === "host-ja" ? "host" as const : "guest" as const,
       sourceLanguage,
       targetLanguage: sourceLanguage === "ja" ? "en" as const : "ja" as const,
       roomEpoch: claims.roomEpoch,
       roomState: this.roomState,
+      roomOwner: { leaseId: this.ownerLeaseId, fencingToken: this.ownerFence, expiresAtMs: this.ownerExpiresAtMs },
     };
   }
 
+  async renewRoomOwnership(input: Parameters<Authority["renewRoomOwnership"]>[0]) {
+    this.assertOwner(input.roomOwner);
+    this.ownerExpiresAtMs = Date.now() + 10_000;
+    return { leaseId: this.ownerLeaseId!, fencingToken: this.ownerFence, expiresAtMs: this.ownerExpiresAtMs };
+  }
+
   async syncPresence(value: Parameters<Authority["syncPresence"]>[0]) {
+    this.assertOwner(value.roomOwner);
     const allowed = value.participants.filter(
       participant => this.grants.get(participant.participantId) === participant.admissionId,
     );
@@ -106,12 +127,19 @@ class MockAuthority implements Authority {
     this.assertCurrent(event);
   }
 
-  private assertCurrent(value: { participantId: string; admissionId: string; generation: number }): void {
+  private assertCurrent(value: { participantId: string; admissionId: string; generation: number; roomOwner?: { leaseId: string; fencingToken: number } }): void {
+    if (value.roomOwner) this.assertOwner(value.roomOwner);
     if (
       this.grants.get(value.participantId) !== value.admissionId
       || this.generations.get(value.participantId) !== value.generation
     ) {
       throw new Error("STALE_ADMISSION");
+    }
+  }
+
+  private assertOwner(value: { leaseId: string; fencingToken: number }): void {
+    if (value.leaseId !== this.ownerLeaseId || value.fencingToken !== this.ownerFence) {
+      throw new Error("STALE_ROOM_OWNER");
     }
   }
 
